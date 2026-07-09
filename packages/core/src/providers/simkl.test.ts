@@ -165,6 +165,52 @@ describe('SimklClient progress', () => {
     });
   });
 
+  it('enriches resume positions with runtime from the detail endpoint (ms reconstruction)', async () => {
+    const calls = routeFetch((url) => {
+      if (url.includes('/sync/playback'))
+        return {
+          body: [
+            { type: 'movie', progress: 50, paused_at: null, movie: { title: 'Fight Club', ids: { simkl: 100, tmdb: 550 } } },
+            { type: 'episode', progress: 25, paused_at: null, show: { title: 'V', ids: { simkl: 15279, tmdb: 21494 } }, episode: { season: 1, number: 1 } },
+          ],
+        };
+      if (url.includes('/movies/100')) return { body: { title: 'Fight Club', runtime: 139 } };
+      if (url.includes('/tv/15279')) return { body: { title: 'V', runtime: 45 } };
+      return { body: {} };
+    });
+    const events = await new SimklClient(cfg).pullProgress();
+    const movie = events.find((e) => e.ref.kind === 'movie')!;
+    expect(movie.runtimeMs).toBe(139 * 60_000);
+    expect(movie.positionMs).toBe(Math.round(0.5 * 139 * 60_000));
+    const ep = events.find((e) => e.ref.kind === 'episode')!;
+    expect(ep.runtimeMs).toBe(45 * 60_000);
+    expect(ep.positionMs).toBe(Math.round(0.25 * 45 * 60_000));
+    // Anime detection: a plain show uses /tv, not /anime.
+    expect(calls.some((c) => c.url.includes('/tv/15279'))).toBe(true);
+    expect(calls.some((c) => c.url.includes('/anime/'))).toBe(false);
+  });
+
+  it('uses the /anime detail endpoint when the show has anime ids', async () => {
+    const calls = routeFetch((url) => {
+      if (url.includes('/sync/playback'))
+        return { body: [{ type: 'episode', progress: 10, show: { title: 'A', ids: { simkl: 7, mal: 123 } }, episode: { season: 1, number: 1 } }] };
+      if (url.includes('/anime/7')) return { body: { runtime: 24 } };
+      return { body: {} };
+    });
+    const events = await new SimklClient(cfg).pullProgress();
+    expect(events[0]!.runtimeMs).toBe(24 * 60_000);
+    expect(calls.some((c) => c.url.includes('/anime/7'))).toBe(true);
+  });
+
+  it('leaves ms fields unset when no Simkl id is present (never guesses)', async () => {
+    routeFetch((url) =>
+      url.includes('/sync/playback') ? { body: [{ type: 'movie', progress: 50, movie: { title: 'X', ids: { tmdb: 1 } } }] } : { body: {} },
+    );
+    const events = await new SimklClient(cfg).pullProgress();
+    expect(events[0]!.positionMs).toBeUndefined();
+    expect(events[0]!.runtimeMs).toBeUndefined();
+  });
+
   it('writes a movie resume position to /scrobble/pause', async () => {
     const calls = routeFetch(() => ({ body: {} }));
     const res = await new SimklClient(cfg).pushProgress([{ ref: { kind: 'movie', ids: { tmdb: 550 } }, progress: 42 }]);

@@ -1,6 +1,7 @@
 import { HttpClient, HttpError } from './http.js';
 import {
   emptyPushResult,
+  positionFromRuntime,
   type ExternalIds,
   type MediaRef,
   type ProgressEvent,
@@ -248,16 +249,47 @@ export class SimklClient {
     const out: ProgressEvent[] = [];
     for (const it of items ?? []) {
       if (it.type === 'movie' && it.movie) {
-        out.push({ ref: { kind: 'movie', ids: toIds(it.movie.ids), title: it.movie.title }, progress: it.progress, pausedAt: it.paused_at ?? null });
-      } else if (it.type === 'episode' && it.show && it.episode) {
+        const ids = toIds(it.movie.ids);
+        // `/sync/playback` omits runtime; look it up so targets that store a
+        // millisecond position (PMDB) can reconstruct one.
+        const runtime = await this.runtimeMinutes('movie', ids);
         out.push({
-          ref: { kind: 'episode', ids: toIds(it.show.ids), season: it.episode.season, number: it.episode.number, title: it.show.title },
+          ref: { kind: 'movie', ids, title: it.movie.title },
           progress: it.progress,
           pausedAt: it.paused_at ?? null,
+          ...positionFromRuntime(runtime, it.progress),
+        });
+      } else if (it.type === 'episode' && it.show && it.episode) {
+        const ids = toIds(it.show.ids);
+        const runtime = await this.runtimeMinutes('episode', ids);
+        out.push({
+          ref: { kind: 'episode', ids, season: it.episode.season, number: it.episode.number, title: it.show.title },
+          progress: it.progress,
+          pausedAt: it.paused_at ?? null,
+          ...positionFromRuntime(runtime, it.progress),
         });
       }
     }
     return out;
+  }
+
+  /** Per-item runtime (minutes) from Simkl's detail endpoints; cached per client. */
+  private readonly runtimeCache = new Map<string, number | undefined>();
+  private async runtimeMinutes(kind: 'movie' | 'episode', ids: ExternalIds): Promise<number | undefined> {
+    if (ids.simkl === undefined) return undefined; // no Simkl id — can't call the detail endpoint
+    const isAnime = ids.mal !== undefined || ids.anilist !== undefined || ids.anidb !== undefined;
+    const endpoint = kind === 'movie' ? 'movies' : isAnime ? 'anime' : 'tv';
+    const key = `${endpoint}:${ids.simkl}`;
+    const cached = this.runtimeCache.get(key);
+    if (cached !== undefined || this.runtimeCache.has(key)) return cached;
+    // For a TV/anime show the detail runtime is the typical episode length,
+    // which is what an episode resume position needs.
+    const runtime = await this.http
+      .get<{ runtime?: number | null }>(`/${endpoint}/${ids.simkl}?extended=full`)
+      .then((r) => (typeof r.runtime === 'number' && r.runtime > 0 ? r.runtime : undefined))
+      .catch(() => undefined);
+    this.runtimeCache.set(key, runtime);
+    return runtime;
   }
 
   /** Write resume positions via `/scrobble/pause` (one call per item). */
