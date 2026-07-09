@@ -63,6 +63,29 @@ describe('runSync', () => {
     expect(target.history).toHaveLength(2); // no duplicates
   });
 
+  it('remembers deliveries and converges against a target that never echoes writes back', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = [{ ref: { kind: 'episode', ids: { tmdb: 78173 }, season: 3, number: 1 }, watchedAt: null }];
+    // A target that accepts pushes but never reflects them on read (like Simkl
+    // for split shows): pushHistory reports success, pullHistory stays empty.
+    const swallowing = new FakeProvider('simkl');
+    swallowing.pushHistory = async (events) => ({ ...emptyPushResult(), added: events.length });
+
+    const first = await runSync(source, swallowing, { dataTypes: ['history'], preview: false, now });
+    expect(first.results[0]!.planned).toBe(1);
+    expect(first.deliveredHistory).toHaveLength(1);
+
+    // Without the memory it would re-plan; feeding it back converges to zero.
+    const second = await runSync(source, swallowing, {
+      dataTypes: ['history'],
+      preview: false,
+      deliveredHistory: first.deliveredHistory,
+      now,
+    });
+    expect(second.results[0]!.planned).toBe(0);
+    expect(second.results[0]!.skippedPresent).toBe(1);
+  });
+
   it('notes when the source cannot provide progress', async () => {
     const source = new FakeProvider('simkl', false); // progress not capable
     const target = new FakeProvider('pmdb');

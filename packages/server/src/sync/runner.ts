@@ -10,6 +10,7 @@ import {
 import type { Db } from '../db/client.js';
 import { syncs, syncRuns, type Sync, type SyncRun } from '../db/schema.js';
 import type { ConnectionService } from '../connections/service.js';
+import { DeliveriesStore } from './deliveries.js';
 
 const log = createLogger('runner');
 
@@ -60,10 +61,14 @@ function advanceCursor(
 
 /** Executes a sync configuration by wiring connected clients into the engine. */
 export class SyncRunner {
+  private readonly deliveries: DeliveriesStore;
+
   constructor(
     private readonly db: Db,
     private readonly connections: ConnectionService,
-  ) {}
+  ) {
+    this.deliveries = new DeliveriesStore(db);
+  }
 
   /** Plan only — nothing is written, nothing is persisted. */
   preview(sync: Sync): Promise<RunOutcome> {
@@ -88,14 +93,30 @@ export class SyncRunner {
     const key = (provider: string) => `${provider}:history`;
     const reports: SyncReport[] = [];
     try {
-      const forward = await runSync(source, target, { dataTypes, preview, since: cursors[key(sync.source)] ?? null });
+      const forward = await runSync(source, target, {
+        dataTypes,
+        preview,
+        since: cursors[key(sync.source)] ?? null,
+        deliveredHistory: await this.deliveries.load(sync.id, sync.target),
+      });
       reports.push(forward);
       advanceCursor(cursors, key(sync.source), source, forward);
+      if (!preview && forward.deliveredHistory?.length) {
+        await this.deliveries.record(sync.id, sync.userId, sync.target, forward.deliveredHistory);
+      }
 
       if (sync.direction === 'two_way') {
-        const back = await runSync(target, source, { dataTypes, preview, since: cursors[key(sync.target)] ?? null });
+        const back = await runSync(target, source, {
+          dataTypes,
+          preview,
+          since: cursors[key(sync.target)] ?? null,
+          deliveredHistory: await this.deliveries.load(sync.id, sync.source),
+        });
         reports.push(back);
         advanceCursor(cursors, key(sync.target), target, back);
+        if (!preview && back.deliveredHistory?.length) {
+          await this.deliveries.record(sync.id, sync.userId, sync.source, back.deliveredHistory);
+        }
       }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
@@ -114,6 +135,10 @@ export class SyncRunner {
     cursors?: Record<string, string>,
   ): Promise<RunOutcome> {
     if (trigger === 'preview') return outcome;
+
+    // deliveredHistory is convergence bookkeeping, not part of the user-facing
+    // report — drop it from what's stored and returned.
+    outcome = { ...outcome, reports: outcome.reports.map(({ deliveredHistory: _d, ...r }) => r) };
 
     const now = new Date();
     const id = randomUUID();

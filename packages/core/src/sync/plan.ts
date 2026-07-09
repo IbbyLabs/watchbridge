@@ -1,4 +1,4 @@
-import type { ProgressEvent, WatchEvent } from '../providers/types.js';
+import type { MediaRef, ProgressEvent, WatchEvent } from '../providers/types.js';
 import { MatchIndex, hasIdentity, itemKey } from './identity.js';
 
 /**
@@ -15,8 +15,18 @@ export interface HistoryPlan {
   skippedPresent: number; // already in the target
 }
 
-export function planHistorySync(source: WatchEvent[], target: WatchEvent[]): HistoryPlan {
+/**
+ * `extraPresent` are items already delivered to the target on a previous run but
+ * that the target may not report back (provider id/structure mismatches). Treat
+ * them as present so the sync converges instead of re-sending forever.
+ */
+export function planHistorySync(
+  source: WatchEvent[],
+  target: WatchEvent[],
+  extraPresent: MediaRef[] = [],
+): HistoryPlan {
   const targetIndex = MatchIndex.from(target.map((e) => e.ref));
+  for (const ref of extraPresent) targetIndex.add(ref);
   const seen = new Set<string>();
   const plan: HistoryPlan = { toAdd: [], unmatched: [], skippedDuplicate: 0, skippedPresent: 0 };
 

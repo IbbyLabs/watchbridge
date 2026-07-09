@@ -1,5 +1,6 @@
 import type {
   DataType,
+  MediaRef,
   ProgressEvent,
   ProviderCapabilities,
   ProviderId,
@@ -46,6 +47,12 @@ export interface SyncReport {
   target: ProviderId;
   preview: boolean;
   results: DataTypeReport[];
+  /**
+   * History items successfully delivered to the target this run. The caller
+   * persists these so future runs treat them as present (convergence memory).
+   * Not part of the user-facing report.
+   */
+  deliveredHistory?: MediaRef[];
   startedAt: string;
   finishedAt: string;
 }
@@ -56,6 +63,8 @@ export interface RunSyncOptions {
   preview: boolean;
   /** Delta cursor for the source's history pull (Simkl). */
   since?: string | null;
+  /** Items already delivered to the target on prior runs; treated as present. */
+  deliveredHistory?: MediaRef[];
   /** Injected clock for deterministic timestamps in tests. */
   now?: () => Date;
 }
@@ -73,10 +82,13 @@ export async function runSync(
   const now = options.now ?? (() => new Date());
   const startedAt = now().toISOString();
   const results: DataTypeReport[] = [];
+  let deliveredHistory: MediaRef[] | undefined;
 
   for (const dataType of options.dataTypes) {
     if (dataType === 'history') {
-      results.push(await runHistory(source, target, options.preview, options.since));
+      const { report, delivered } = await runHistory(source, target, options.preview, options.since, options.deliveredHistory);
+      results.push(report);
+      if (delivered.length > 0) deliveredHistory = delivered;
     } else if (dataType === 'progress') {
       results.push(await runProgress(source, target, options.preview));
     } else {
@@ -84,7 +96,7 @@ export async function runSync(
     }
   }
 
-  return { source: source.id, target: target.id, preview: options.preview, results, startedAt, finishedAt: now().toISOString() };
+  return { source: source.id, target: target.id, preview: options.preview, results, deliveredHistory, startedAt, finishedAt: now().toISOString() };
 }
 
 async function runHistory(
@@ -92,10 +104,11 @@ async function runHistory(
   target: SyncTarget,
   preview: boolean,
   since?: string | null,
-): Promise<DataTypeReport> {
+  delivered: MediaRef[] = [],
+): Promise<{ report: DataTypeReport; delivered: MediaRef[] }> {
   // Source pull may use the delta cursor; the target pull always reflects current state.
   const [src, tgt] = await Promise.all([source.pullHistory(since), target.pullHistory()]);
-  const plan = planHistorySync(src, tgt);
+  const plan = planHistorySync(src, tgt, delivered);
   const report: DataTypeReport = {
     dataType: 'history',
     planned: plan.toAdd.length,
@@ -106,12 +119,17 @@ async function runHistory(
     notFound: 0,
     failed: 0,
   };
+  let deliveredNow: MediaRef[] = [];
   if (!preview && plan.toAdd.length > 0) {
     const res = await target.pushHistory(plan.toAdd);
     applyPush(report, res);
+    // A push that didn't throw reached the target. Remember these so the next
+    // run treats them as present — targets that accept a write but don't echo it
+    // back (provider id/structure mismatch) would otherwise re-send every run.
+    if (res.failed === 0) deliveredNow = plan.toAdd.map((e) => e.ref);
   }
   log.info({ source: source.id, target: target.id, preview, ...report }, 'history planned');
-  return report;
+  return { report, delivered: deliveredNow };
 }
 
 async function runProgress(source: SyncSource, target: SyncTarget, preview: boolean): Promise<DataTypeReport> {

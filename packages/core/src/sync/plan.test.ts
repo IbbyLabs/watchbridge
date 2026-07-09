@@ -94,6 +94,22 @@ describe('planHistorySync', () => {
     expect(plan.toAdd).toHaveLength(1);
   });
 
+  it('treats extraPresent (already-delivered) items as present so they are not re-sent', () => {
+    const source = [episode(1399, 1, 1), episode(1399, 1, 2)];
+    // Episode 1 was delivered on a prior run but the target never echoes it back.
+    const plan = planHistorySync(source, [], [episode(1399, 1, 1).ref]);
+    expect(plan.toAdd).toEqual([expect.objectContaining({ ref: expect.objectContaining({ season: 1, number: 2 }) })]);
+    expect(plan.skippedPresent).toBe(1);
+  });
+
+  it('converges to zero once every item has been delivered, even if the target still reports none', () => {
+    const source = [episode(1399, 1, 1), movie(550)];
+    const delivered = source.map((e) => e.ref);
+    const plan = planHistorySync(source, [], delivered);
+    expect(plan.toAdd).toHaveLength(0);
+    expect(plan.skippedPresent).toBe(2);
+  });
+
   it('converges: a completed-show target plans zero on the second run', () => {
     // First sync pushes episodes; the target then reports the series as completed
     // (no episodes enumerated). The re-run must plan nothing, not re-add.

@@ -155,9 +155,42 @@ export const syncRuns = pgTable(
   (t) => [index('sync_runs_sync_idx').on(t.syncId), index('sync_runs_user_idx').on(t.userId)],
 );
 
+/**
+ * Items a sync has successfully delivered to a target. Some providers accept a
+ * write but never echo it back under the ids the sync reads by (e.g. Simkl
+ * models certain shows' seasons as separate entries), so the diff would re-send
+ * them forever. Recording what we've delivered lets planning treat them as
+ * present and converge. Additive-only by design: a re-watch is a new item, but
+ * un-watching on the target is not re-pushed.
+ */
+export const deliveries = pgTable(
+  'deliveries',
+  {
+    id: text('id').primaryKey(),
+    syncId: text('sync_id')
+      .notNull()
+      .references(() => syncs.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Provider the item was delivered TO. */
+    target: text('target').notNull(),
+    /** Canonical item-identity key (highest-priority id + S/E). */
+    itemKey: text('item_key').notNull(),
+    /** JSON MediaRef, to rebuild the match index. */
+    ref: text('ref').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('deliveries_scope_key_uniq').on(t.syncId, t.target, t.itemKey),
+    index('deliveries_scope_idx').on(t.syncId, t.target),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
 export type Connection = typeof connections.$inferSelect;
 export type Sync = typeof syncs.$inferSelect;
 export type SyncRun = typeof syncRuns.$inferSelect;
+export type Delivery = typeof deliveries.$inferSelect;
