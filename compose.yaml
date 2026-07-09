@@ -1,0 +1,53 @@
+services:
+  app:
+    build: .
+    image: ghcr.io/ibbylabs/watchbridge:latest
+    ports:
+      - '8080:8080'
+    environment:
+      NODE_ENV: production
+      PORT: '8080'
+      APP_URL: http://localhost:8080
+      DATABASE_URL: postgres://watchbridge:watchbridge@postgres:5432/watchbridge
+      REDIS_URL: redis://redis:6379
+      # Provide these via a .env file or your secret manager:
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      SESSION_SECRET: ${SESSION_SECRET}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-cloudflare}
+      # Local email capture via Mailhog (UI at http://localhost:8025).
+      SMTP_HOST: mailhog
+      SMTP_PORT: '1025'
+      SMTP_SECURE: 'false'
+      MAIL_FROM: Watchbridge <no-reply@localhost>
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: watchbridge
+      POSTGRES_PASSWORD: watchbridge
+      POSTGRES_DB: watchbridge
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U watchbridge']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - '8025:8025'
+
+volumes:
+  pgdata:

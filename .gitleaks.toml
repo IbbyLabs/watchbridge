@@ -1,0 +1,13 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and documented placeholders, not real secrets"
+paths = [
+  '''.*\.test\.ts$''',
+  '''\.env\.sample$''',
+]
+regexes = [
+  '''pm-[A-Za-z0-9-]{6,}''',
+  '''\$argon2id\$[^"']*''',
+]

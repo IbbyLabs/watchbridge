@@ -1,0 +1,128 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { loadConfig, type AppConfig } from '@watchbridge/core';
+import type { FastifyInstance } from 'fastify';
+import { createDb, type Db } from '../db/client.js';
+import type { Mailer } from '../mail/mailer.js';
+import { buildApp } from '../app.js';
+
+const captured: { verifyUrl?: string } = {};
+const mailer: Mailer = {
+  async sendVerificationEmail(_to, url) {
+    captured.verifyUrl = url;
+  },
+  async verify() {
+    return true;
+  },
+};
+
+const testEnv = {
+  NODE_ENV: 'test',
+  APP_URL: 'http://localhost:8080',
+  DATABASE_URL: 'pglite://memory',
+  APP_ENCRYPTION_KEY: Buffer.alloc(32, 3).toString('base64'),
+  SESSION_SECRET: 'z'.repeat(40),
+  TRAKT_CLIENT_ID: 'tcid',
+  TRAKT_CLIENT_SECRET: 'tsec',
+} as NodeJS.ProcessEnv;
+
+// Stateful mock: PMDB "remembers" pushed plays so idempotency is exercised.
+const pmdbWatched: Array<{ id: string; tmdb_id: number; media_type: string; watched_at: string | null }> = [];
+let pmdbSeq = 0;
+
+function installFetch() {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      const body = init?.body ? JSON.parse(init.body as string) : undefined;
+      const json = (status: number, b: unknown) => new Response(JSON.stringify(b), { status });
+
+      // Trakt connect
+      if (url.endsWith('/oauth/device/code')) return json(200, { device_code: 'dc', user_code: 'CODE', verification_url: 'https://trakt.tv/activate', expires_in: 600, interval: 5 });
+      if (url.endsWith('/oauth/device/token')) return json(200, { access_token: 'at', refresh_token: 'rt', expires_in: 7776000, created_at: 0 });
+      if (url.endsWith('/users/settings')) return json(200, { user: { username: 'dave' } });
+
+      // Trakt history reads
+      if (url.includes('/sync/history/movies')) return json(200, [{ watched_at: '2021-01-01T00:00:00Z', movie: { title: 'Fight Club', ids: { trakt: 1, imdb: 'tt0137523', tmdb: 550 } } }]);
+      if (url.includes('/sync/history/episodes')) return json(200, []);
+
+      // PMDB watched read/write
+      if (url.includes('/api/external/watched')) {
+        if (method === 'POST') {
+          pmdbWatched.push({ id: `w${++pmdbSeq}`, tmdb_id: body.tmdb_id, media_type: body.media_type, watched_at: body.watched_at });
+          return json(200, { success: true });
+        }
+        return json(200, { items: pmdbWatched, total: pmdbWatched.length, totalPages: 1 });
+      }
+      return json(404, {});
+    }),
+  );
+}
+
+let app: FastifyInstance;
+let db: Db;
+let config: AppConfig;
+let cookie: string;
+const authed = (opts: Record<string, unknown>) => app.inject({ ...opts, cookies: { wb_session: cookie } } as never);
+
+beforeAll(async () => {
+  installFetch();
+  config = loadConfig(testEnv);
+  db = await createDb(config.DATABASE_URL);
+  await db.migrate();
+  app = buildApp({ config, db, mailer });
+  await app.ready();
+
+  await app.inject({ method: 'POST', url: '/api/auth/register', payload: { email: 'd@e.com', username: 'dave', password: 'correcthorse' } });
+  const token = new URL(captured.verifyUrl!).searchParams.get('token')!;
+  await app.inject({ method: 'GET', url: `/api/auth/verify?token=${token}` });
+  cookie = (await app.inject({ method: 'POST', url: '/api/auth/login', payload: { identifier: 'dave', password: 'correcthorse' } })).cookies.find((c) => c.name === 'wb_session')!.value;
+
+  // Connect Trakt (device) and PMDB (key).
+  await authed({ method: 'POST', url: '/api/connections/trakt/device' });
+  await authed({ method: 'POST', url: '/api/connections/trakt/device/poll', payload: { deviceCode: 'dc' } });
+  await authed({ method: 'POST', url: '/api/connections/pmdb', payload: { apiKey: 'pm-key-1234567890' } });
+});
+
+afterAll(async () => {
+  await app.close();
+  await db.close();
+});
+
+describe('sync end-to-end (trakt -> pmdb history)', () => {
+  let syncId: string;
+
+  it('creates a sync', async () => {
+    const res = await authed({ method: 'POST', url: '/api/syncs', payload: { name: 'Trakt to PMDB', source: 'trakt', target: 'pmdb', dataTypes: ['history'] } });
+    expect(res.statusCode).toBe(201);
+    syncId = res.json().id;
+  });
+
+  it('preview plans one add without writing', async () => {
+    const res = await authed({ method: 'POST', url: `/api/syncs/${syncId}/preview` });
+    const out = res.json();
+    expect(out.reports[0].results[0]).toMatchObject({ dataType: 'history', planned: 1, added: 0 });
+    expect(pmdbWatched).toHaveLength(0);
+  });
+
+  it('run applies the add', async () => {
+    const res = await authed({ method: 'POST', url: `/api/syncs/${syncId}/run` });
+    const out = res.json();
+    expect(out.status).toBe('success');
+    expect(out.reports[0].results[0]).toMatchObject({ planned: 1, added: 1 });
+    expect(pmdbWatched).toHaveLength(1);
+    expect(pmdbWatched[0]).toMatchObject({ tmdb_id: 550, media_type: 'movie', watched_at: '2021-01-01T00:00:00Z' });
+  });
+
+  it('re-run is idempotent (no duplicate)', async () => {
+    const res = await authed({ method: 'POST', url: `/api/syncs/${syncId}/run` });
+    expect(res.json().reports[0].results[0]).toMatchObject({ planned: 0, added: 0 });
+    expect(pmdbWatched).toHaveLength(1);
+  });
+
+  it('records run history', async () => {
+    const res = await authed({ method: 'GET', url: `/api/syncs/${syncId}/runs` });
+    const runs = res.json() as unknown[];
+    expect(runs.length).toBe(2); // two manual runs (preview not persisted)
+  });
+});
