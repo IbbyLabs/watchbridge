@@ -1,0 +1,1 @@
+ALTER TABLE "syncs" ADD COLUMN "cursors" text DEFAULT '{}' NOT NULL;
