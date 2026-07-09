@@ -92,6 +92,42 @@ describe('Trakt pushHistory', () => {
   });
 });
 
+describe('Trakt pullProgress', () => {
+  const withTokens = () => new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
+
+  it('requests extended=full and reconstructs position/runtime in ms from the runtime', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/playback')
+        ? {
+            body: [
+              { progress: 50, paused_at: '2025-01-01T00:00:00Z', type: 'movie', movie: { title: 'Fight Club', runtime: 139, ids: { tmdb: 550 } } },
+              { progress: 25, paused_at: '2025-02-02T00:00:00Z', type: 'episode', episode: { season: 1, number: 1, runtime: 60, ids: { trakt: 10 } }, show: { title: 'GoT', ids: { tmdb: 1399 } } },
+            ],
+          }
+        : { body: [] },
+    );
+    const events = await withTokens().pullProgress();
+    expect(calls[0]!.url).toContain('extended=full');
+    const movie = events.find((e) => e.ref.kind === 'movie')!;
+    expect(movie.runtimeMs).toBe(139 * 60_000);
+    expect(movie.positionMs).toBe(Math.round(0.5 * 139 * 60_000));
+    const ep = events.find((e) => e.ref.kind === 'episode')!;
+    expect(ep.runtimeMs).toBe(60 * 60_000);
+    expect(ep.positionMs).toBe(Math.round(0.25 * 60 * 60_000));
+  });
+
+  it('omits ms fields when the source reports no runtime', async () => {
+    routeFetch((rec) =>
+      rec.url.includes('/sync/playback')
+        ? { body: [{ progress: 50, paused_at: null, type: 'movie', movie: { title: 'X', ids: { tmdb: 1 } } }] }
+        : { body: [] },
+    );
+    const events = await withTokens().pullProgress();
+    expect(events[0]!.positionMs).toBeUndefined();
+    expect(events[0]!.runtimeMs).toBeUndefined();
+  });
+});
+
 describe('Trakt pushProgress', () => {
   const withTokens = () => new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
 

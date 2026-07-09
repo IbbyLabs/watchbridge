@@ -66,3 +66,18 @@ export interface PushResult {
 }
 
 export const emptyPushResult = (): PushResult => ({ added: 0, skipped: 0, failed: 0, notFound: 0 });
+
+/**
+ * Reconstruct a millisecond resume position from a percentage + a runtime in
+ * minutes (as Trakt/Simkl report it). Lets targets that store resume positions
+ * in milliseconds (PMDB) accept progress from percentage-only sources. Returns
+ * empty when the runtime is unknown, so nothing is guessed.
+ */
+export const positionFromRuntime = (
+  runtimeMinutes: number | undefined,
+  progress: number,
+): { positionMs?: number; runtimeMs?: number } => {
+  if (runtimeMinutes === undefined || runtimeMinutes <= 0) return {};
+  const runtimeMs = Math.round(runtimeMinutes * 60_000);
+  return { runtimeMs, positionMs: Math.round((progress / 100) * runtimeMs) };
+};

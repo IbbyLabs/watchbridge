@@ -1,6 +1,7 @@
 import { HttpClient, HttpError } from './http.js';
 import {
   emptyPushResult,
+  positionFromRuntime,
   type ExternalIds,
   type MediaRef,
   type ProgressEvent,
@@ -48,8 +49,9 @@ interface TraktPlaybackItem {
   progress: number;
   paused_at: string;
   type: 'movie' | 'episode';
-  movie?: { title?: string; year?: number; ids: TraktIdBlock };
-  episode?: { season: number; number: number; ids: TraktIdBlock };
+  // `runtime` (minutes) is present on the movie/episode object with extended=full.
+  movie?: { title?: string; year?: number; runtime?: number; ids: TraktIdBlock };
+  episode?: { season: number; number: number; runtime?: number; ids: TraktIdBlock };
   show?: { title?: string; year?: number; ids: TraktIdBlock };
 }
 
@@ -258,18 +260,26 @@ export class TraktClient {
   }
 
   async pullProgress(): Promise<ProgressEvent[]> {
+    // extended=full adds `runtime` (minutes) so downstream targets that need a
+    // resume position in milliseconds (PMDB) can reconstruct it.
     const items = await this.authed<TraktPlaybackItem[]>((auth) =>
-      this.http.get('/sync/playback?limit=100', { headers: auth }),
+      this.http.get('/sync/playback?limit=100&extended=full', { headers: auth }),
     );
     const out: ProgressEvent[] = [];
     for (const it of items) {
       if (it.type === 'movie' && it.movie) {
-        out.push({ ref: { kind: 'movie', ids: toIds(it.movie.ids), title: it.movie.title }, progress: it.progress, pausedAt: it.paused_at });
+        out.push({
+          ref: { kind: 'movie', ids: toIds(it.movie.ids), title: it.movie.title },
+          progress: it.progress,
+          pausedAt: it.paused_at,
+          ...positionFromRuntime(it.movie.runtime, it.progress),
+        });
       } else if (it.type === 'episode' && it.episode && it.show) {
         out.push({
           ref: { kind: 'episode', ids: toIds(it.show.ids), season: it.episode.season, number: it.episode.number, title: it.show.title },
           progress: it.progress,
           pausedAt: it.paused_at,
+          ...positionFromRuntime(it.episode.runtime, it.progress),
         });
       }
     }
