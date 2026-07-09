@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { IconLink, IconSettings, IconSync } from './icons.tsx';
 import { Logo } from './Logo.tsx';
+import { Footer } from './Footer.tsx';
 import { useSession } from '../lib/session.tsx';
 
 const PRIMARY = [
@@ -64,7 +65,10 @@ export function Layout({ children }: { children: ReactNode }) {
         <Wordmark />
       </header>
 
-      <main className="mx-auto w-full max-w-4xl px-4 pb-28 pt-6 md:px-8 md:py-8 md:pb-8">{children}</main>
+      <main className="mx-auto flex w-full max-w-4xl flex-col px-4 pb-28 pt-6 md:px-8 md:py-8 md:pb-8">
+        <div className="flex-1">{children}</div>
+        <Footer />
+      </main>
 
       {/* Mobile bottom tab bar: thumb-reachable, never overflows. */}
       <nav
