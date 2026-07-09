@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TraktClient } from './trakt.js';
-import type { WatchEvent } from './types.js';
+import type { ProgressEvent, WatchEvent } from './types.js';
 
 interface Recorded {
   url: string;
@@ -89,6 +89,35 @@ describe('Trakt pushHistory', () => {
     expect(post.shows).toHaveLength(1);
     expect(post.shows[0]!.seasons[0]).toMatchObject({ number: 1 });
     expect(post.shows[0]!.seasons[0]!.episodes).toHaveLength(2);
+  });
+});
+
+describe('Trakt pushProgress', () => {
+  const withTokens = () => new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
+
+  it('posts a movie resume position to /scrobble/pause', async () => {
+    const calls = routeFetch(() => ({ status: 201, body: { action: 'pause', progress: 42 } }));
+    const events: ProgressEvent[] = [{ ref: { kind: 'movie', ids: { tmdb: 550 } }, progress: 42 }];
+    const res = await withTokens().pushProgress(events);
+    expect(res.added).toBe(1);
+    const post = calls.find((c) => c.url.endsWith('/scrobble/pause'))!;
+    expect(post.body).toMatchObject({ movie: { ids: { tmdb: 550 } }, progress: 42 });
+  });
+
+  it('posts an episode resume position with show ids and season/number', async () => {
+    const calls = routeFetch(() => ({ status: 201, body: { action: 'pause' } }));
+    const events: ProgressEvent[] = [{ ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 2, number: 3 }, progress: 61 }];
+    const res = await withTokens().pushProgress(events);
+    expect(res.added).toBe(1);
+    const post = calls.find((c) => c.url.endsWith('/scrobble/pause'))!;
+    expect(post.body).toMatchObject({ show: { ids: { tmdb: 1399 } }, episode: { season: 2, number: 3 }, progress: 61 });
+  });
+
+  it('treats a 409 (already scrobbling) as applied', async () => {
+    routeFetch(() => ({ status: 409 }));
+    const res = await withTokens().pushProgress([{ ref: { kind: 'movie', ids: { tmdb: 550 } }, progress: 42 }]);
+    expect(res.added).toBe(1);
+    expect(res.failed).toBe(0);
   });
 });
 

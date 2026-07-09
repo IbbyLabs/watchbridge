@@ -332,14 +332,42 @@ export class TraktClient {
     return result;
   }
 
-  /**
-   * Writing playback progress to Trakt requires the scrobble endpoints, which
-   * are out of scope for v1. Reported as notFound so the sync report is honest.
-   */
+  /** Write resume positions via `/scrobble/pause` (one call per item). */
   async pushProgress(events: ProgressEvent[]): Promise<PushResult> {
-    const r = emptyPushResult();
-    r.notFound = events.length;
-    return r;
+    const result = emptyPushResult();
+    for (const e of events) {
+      let body: Record<string, unknown>;
+      if (e.ref.kind === 'movie') {
+        if (!hasWritableId(e.ref.ids)) {
+          result.notFound++;
+          continue;
+        }
+        body = { movie: { ids: writableIds(e.ref.ids) }, progress: e.progress };
+      } else if (e.ref.kind === 'episode') {
+        if (e.ref.season === undefined || e.ref.number === undefined || !hasWritableId(e.ref.ids)) {
+          result.notFound++;
+          continue;
+        }
+        body = {
+          show: { ids: writableIds(e.ref.ids) },
+          episode: { season: e.ref.season, number: e.ref.number },
+          progress: e.progress,
+        };
+      } else {
+        // Whole-show markers carry no resume position.
+        result.notFound++;
+        continue;
+      }
+      try {
+        await this.authed((auth) => this.http.post('/scrobble/pause', body, { headers: auth }));
+        result.added++;
+      } catch (err) {
+        // 409 = a scrobble for this item is already in progress; treat as applied.
+        if (err instanceof HttpError && err.status === 409) result.added++;
+        else result.failed++;
+      }
+    }
+    return result;
   }
 
   // ── helpers ──────────────────────────────────────────────────────

@@ -31,7 +31,16 @@ interface SimklShowItem {
   watched_episodes_count?: number;
   total_episodes_count?: number;
   show: { title?: string; year?: number; ids: SimklIdBlock };
-  seasons?: Array<{ number: number; episodes?: Array<{ number: number }> }>;
+  seasons?: Array<{ number: number; episodes?: Array<{ number: number; watched_at?: string }> }>;
+}
+
+interface SimklPlaybackItem {
+  progress: number; // 0-100
+  paused_at?: string;
+  type: 'movie' | 'episode';
+  movie?: { title?: string; year?: number; ids: SimklIdBlock };
+  show?: { title?: string; year?: number; ids: SimklIdBlock };
+  episode?: { season: number; number: number };
 }
 
 export interface SimklPin {
@@ -90,8 +99,7 @@ export class SimklClient {
   }
 
   capabilities(): ProviderCapabilities {
-    // Simkl has no reliable per-episode watched date, and no resume position API.
-    return { history: true, progress: false, ratings: true, watchlist: true, datedHistory: false };
+    return { history: true, progress: true, ratings: true, watchlist: true, datedHistory: false };
   }
 
   // ── Authorization-code (redirect) flow ───────────────────────────
@@ -197,13 +205,18 @@ export class SimklClient {
       });
     }
 
-    // Read every status, not just "completed": Simkl only enumerates episodes for
-    // shows you're mid-way through ("watching"); a fully-watched show reports
-    // watched==total with no season/episode list. So enumerated episodes become
-    // episode events, and a completed show becomes a whole-show marker.
+    // Read every status, and force Simkl to enumerate watched episodes for all of
+    // them: `include_all_episodes` lists seasons[].episodes[] for completed and
+    // dropped shows too (they skip episode loading by default), and
+    // `episode_watched_at` attaches the real per-episode date. Only actually-watched
+    // episodes are returned (e.g. 1 watched of 160 → just that one), so this never
+    // marks an unwatched episode. The whole-show branch is a fallback for any show
+    // Simkl still declines to enumerate.
     for (const type of ['shows', 'anime'] as const) {
       const res = await this.http
-        .get<Record<string, SimklShowItem[]>>(`/sync/all-items/${type}?extended=full${delta}`)
+        .get<Record<string, SimklShowItem[]>>(
+          `/sync/all-items/${type}?extended=full&include_all_episodes=yes&episode_watched_at=yes${delta}`,
+        )
         .catch(() => ({}) as Record<string, SimklShowItem[]>);
       const items = res[type] ?? res.shows ?? [];
       for (const s of items) {
@@ -213,15 +226,13 @@ export class SimklClient {
           for (const season of s.seasons ?? []) {
             for (const ep of season.episodes ?? []) {
               out.push({
-                // Simkl exposes no reliable per-episode date — record the play with
-                // an unknown date (null) rather than inventing one. Stable across runs.
                 ref: { kind: 'episode', ids, season: season.number, number: ep.number, title: s.show.title },
-                watchedAt: null,
+                watchedAt: ep.watched_at ?? null,
               });
             }
           }
         } else if (s.status === 'completed') {
-          // Whole series watched, episodes not listed by Simkl.
+          // Fully watched but not enumerated — mark the whole series.
           out.push({ ref: { kind: 'show', ids, title: s.show.title }, watchedAt: s.last_watched_at ?? null });
         }
       }
@@ -229,15 +240,57 @@ export class SimklClient {
     return out;
   }
 
-  // Simkl has no resume-position API.
+  /** Read resume positions from `/sync/playback` (a flat list of movies + episodes). */
   async pullProgress(): Promise<ProgressEvent[]> {
-    return [];
+    const items = await this.http
+      .get<SimklPlaybackItem[]>('/sync/playback')
+      .catch(() => [] as SimklPlaybackItem[]);
+    const out: ProgressEvent[] = [];
+    for (const it of items ?? []) {
+      if (it.type === 'movie' && it.movie) {
+        out.push({ ref: { kind: 'movie', ids: toIds(it.movie.ids), title: it.movie.title }, progress: it.progress, pausedAt: it.paused_at ?? null });
+      } else if (it.type === 'episode' && it.show && it.episode) {
+        out.push({
+          ref: { kind: 'episode', ids: toIds(it.show.ids), season: it.episode.season, number: it.episode.number, title: it.show.title },
+          progress: it.progress,
+          pausedAt: it.paused_at ?? null,
+        });
+      }
+    }
+    return out;
   }
 
+  /** Write resume positions via `/scrobble/pause` (one call per item). */
   async pushProgress(events: ProgressEvent[]): Promise<PushResult> {
-    const r = emptyPushResult();
-    r.notFound = events.length;
-    return r;
+    const result = emptyPushResult();
+    for (const e of events) {
+      if (e.ref.kind === 'movie') {
+        if (!hasId(e.ref.ids)) {
+          result.notFound++;
+          continue;
+        }
+      } else if (e.ref.kind === 'episode') {
+        if (e.ref.season === undefined || e.ref.number === undefined || !hasId(e.ref.ids)) {
+          result.notFound++;
+          continue;
+        }
+      } else {
+        // Whole-show markers carry no resume position.
+        result.notFound++;
+        continue;
+      }
+      const body: Record<string, unknown> =
+        e.ref.kind === 'movie'
+          ? { movie: { ids: e.ref.ids }, progress: e.progress }
+          : { show: { ids: e.ref.ids }, episode: { season: e.ref.season, number: e.ref.number }, progress: e.progress };
+      try {
+        await this.http.post('/scrobble/pause', body);
+        result.added++;
+      } catch {
+        result.failed++;
+      }
+    }
+    return result;
   }
 
   // ── Writes ───────────────────────────────────────────────────────
