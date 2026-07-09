@@ -1,11 +1,12 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 import { createLogger, type AppConfig } from '@watchbridge/core';
-import { verificationEmail } from './templates.js';
+import { passwordResetEmail, verificationEmail } from './templates.js';
 
 const log = createLogger('mail');
 
 export interface Mailer {
   sendVerificationEmail: (to: string, verifyUrl: string) => Promise<void>;
+  sendPasswordResetEmail: (to: string, resetUrl: string) => Promise<void>;
   /** Verify the SMTP connection at startup; returns false if unavailable. */
   verify: () => Promise<boolean>;
 }
@@ -41,6 +42,12 @@ export function createMailer(config: AppConfig): Mailer {
       const info = await transport.sendMail({ from, to, subject, text, html });
       if (live) log.info({ to, messageId: info.messageId }, 'Verification email sent');
       else log.info({ to, verifyUrl }, 'Verification email (dev, not delivered)');
+    },
+    async sendPasswordResetEmail(to, resetUrl) {
+      const { subject, html, text } = passwordResetEmail(appName, resetUrl);
+      const info = await transport.sendMail({ from, to, subject, text, html });
+      if (live) log.info({ to, messageId: info.messageId }, 'Password reset email sent');
+      else log.info({ to, resetUrl }, 'Password reset email (dev, not delivered)');
     },
     async verify() {
       if (!live) return false;

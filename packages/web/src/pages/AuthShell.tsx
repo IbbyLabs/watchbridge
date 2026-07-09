@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react';
+import { Logo } from '../components/Logo.tsx';
 
 export function AuthShell({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   return (
     <main className="grid min-h-dvh place-items-center px-4 py-10">
       <div className="w-full max-w-sm">
-        <div className="mb-6 flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-[3px] bg-brand" aria-hidden />
+        <div className="mb-6 flex items-center gap-2.5">
+          <Logo className="h-7 w-7" />
           <span className="text-[15px] font-bold tracking-tight text-ink">Watchbridge</span>
         </div>
         <div className="rounded-2xl border border-border bg-surface p-7">

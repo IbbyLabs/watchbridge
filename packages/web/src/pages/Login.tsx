@@ -15,6 +15,7 @@ export function Login() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const verified = params.get('verified');
+  const reset = params.get('reset');
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,6 +44,11 @@ export function Login() {
           That verification link is invalid or expired.
         </p>
       )}
+      {reset === '1' && (
+        <p className="mb-4 rounded-lg bg-success/15 px-3 py-2 text-sm text-success">
+          Password updated — sign in with your new password.
+        </p>
+      )}
       <form onSubmit={submit} className="space-y-4">
         <Field label="Email or username">
           <Input value={identifier} onChange={(e) => setIdentifier(e.target.value)} autoComplete="username" required />
@@ -50,6 +56,11 @@ export function Login() {
         <Field label="Password" error={error ?? undefined}>
           <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
         </Field>
+        <div className="text-right">
+          <Link to="/forgot-password" className="text-sm font-medium text-brand hover:underline">
+            Forgot password?
+          </Link>
+        </div>
         <Button type="submit" loading={loading} className="w-full">
           Sign in
         </Button>

@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, eq, isNull, ne, or } from 'drizzle-orm';
 import { createLogger, safeEqual, type AppConfig } from '@watchbridge/core';
 import type { Db } from '../db/client.js';
-import { emailVerificationTokens, sessions, users, type User } from '../db/schema.js';
+import {
+  emailVerificationTokens,
+  passwordResetTokens,
+  sessions,
+  users,
+  type User,
+} from '../db/schema.js';
 import type { Mailer } from '../mail/mailer.js';
 import { hashPassword, verifyPassword } from './passwords.js';
 import { hashToken, newOpaqueToken } from './tokens.js';
@@ -10,6 +16,7 @@ import { hashToken, newOpaqueToken } from './tokens.js';
 const log = createLogger('auth');
 
 const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
+const RESET_TTL_MS = 60 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type AuthErrorCode =
@@ -17,6 +24,7 @@ export type AuthErrorCode =
   | 'email_taken'
   | 'username_taken'
   | 'invalid_credentials'
+  | 'invalid_password'
   | 'email_unverified'
   | 'account_disabled'
   | 'invalid_token';
@@ -117,6 +125,78 @@ export class AuthService {
       .set({ emailVerified: true, updatedAt: new Date() })
       .where(eq(users.id, row.userId));
     log.info({ userId: row.userId }, 'Email verified');
+  }
+
+  /**
+   * Change the password of a signed-in user. Revokes every other session so a
+   * leaked cookie elsewhere is invalidated, while keeping the caller signed in.
+   */
+  async changePassword(
+    userId: string,
+    currentSessionToken: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    const [user] = await this.db.orm.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) throw new AuthError('invalid_credentials', 401, 'Account not found');
+    if (!(await verifyPassword(user.passwordHash, currentPassword))) {
+      throw new AuthError('invalid_password', 400, 'Current password is incorrect');
+    }
+    await this.db.orm
+      .update(users)
+      .set({ passwordHash: await hashPassword(newPassword), updatedAt: new Date() })
+      .where(eq(users.id, userId));
+    await this.db.orm
+      .delete(sessions)
+      .where(and(eq(sessions.userId, userId), ne(sessions.id, hashToken(currentSessionToken))));
+    log.info({ userId }, 'Password changed');
+  }
+
+  /**
+   * Begin a password reset. Emails a single-use link when the address maps to a
+   * verified account; returns silently otherwise so callers can't probe which
+   * emails are registered.
+   */
+  async requestPasswordReset(rawEmail: string): Promise<void> {
+    const email = rawEmail.trim().toLowerCase();
+    const [user] = await this.db.orm.select().from(users).where(eq(users.email, email)).limit(1);
+    if (!user || user.disabled || !user.emailVerified) return;
+
+    const token = newOpaqueToken();
+    await this.db.orm.insert(passwordResetTokens).values({
+      id: randomUUID(),
+      userId: user.id,
+      tokenHash: token.hash,
+      expiresAt: new Date(Date.now() + RESET_TTL_MS),
+    });
+    const url = `${this.config.APP_URL}/reset-password?token=${token.raw}`;
+    await this.mailer.sendPasswordResetEmail(email, url);
+    log.info({ userId: user.id }, 'Password reset requested');
+  }
+
+  /** Complete a reset: set the new password, consume the token, revoke sessions. */
+  async resetPassword(rawToken: string, newPassword: string): Promise<void> {
+    const tokenHash = hashToken(rawToken);
+    const [row] = await this.db.orm
+      .select()
+      .from(passwordResetTokens)
+      .where(and(eq(passwordResetTokens.tokenHash, tokenHash), isNull(passwordResetTokens.consumedAt)))
+      .limit(1);
+
+    if (!row || row.expiresAt.getTime() < Date.now() || !safeEqual(row.tokenHash, tokenHash)) {
+      throw new AuthError('invalid_token', 400, 'Reset link is invalid or expired');
+    }
+
+    await this.db.orm
+      .update(passwordResetTokens)
+      .set({ consumedAt: new Date() })
+      .where(eq(passwordResetTokens.id, row.id));
+    await this.db.orm
+      .update(users)
+      .set({ passwordHash: await hashPassword(newPassword), updatedAt: new Date() })
+      .where(eq(users.id, row.userId));
+    await this.db.orm.delete(sessions).where(eq(sessions.userId, row.userId));
+    log.info({ userId: row.userId }, 'Password reset completed');
   }
 
   async login(identifier: string, password: string): Promise<User> {

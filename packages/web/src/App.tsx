@@ -5,6 +5,8 @@ import { Layout } from './components/Layout.tsx';
 import { Spinner } from './components/ui.tsx';
 import { Login } from './pages/Login.tsx';
 import { Register } from './pages/Register.tsx';
+import { ForgotPassword } from './pages/ForgotPassword.tsx';
+import { ResetPassword } from './pages/ResetPassword.tsx';
 import { Connections } from './pages/Connections.tsx';
 import { Syncs } from './pages/Syncs.tsx';
 import { Settings } from './pages/Settings.tsx';
@@ -38,6 +40,8 @@ export function App() {
         <Routes>
           <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
           <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
+          <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
+          <Route path="/reset-password" element={<PublicOnly><ResetPassword /></PublicOnly>} />
           <Route path="/syncs" element={<RequireAuth><Syncs /></RequireAuth>} />
           <Route path="/connections" element={<RequireAuth><Connections /></RequireAuth>} />
           <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />

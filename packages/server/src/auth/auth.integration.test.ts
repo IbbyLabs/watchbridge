@@ -5,10 +5,13 @@ import { createDb, type Db } from '../db/client.js';
 import type { Mailer } from '../mail/mailer.js';
 import { buildApp } from '../app.js';
 
-const captured: { verifyUrl?: string } = {};
+const captured: { verifyUrl?: string; resetUrl?: string } = {};
 const mailer: Mailer = {
   async sendVerificationEmail(_to, url) {
     captured.verifyUrl = url;
+  },
+  async sendPasswordResetEmail(_to, url) {
+    captured.resetUrl = url;
   },
   async verify() {
     return true;
@@ -117,5 +120,114 @@ describe('auth flow', () => {
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe('bad_origin');
+  });
+});
+
+describe('password management', () => {
+  async function loginAlice(password: string): Promise<string> {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { identifier: 'alice', password },
+    });
+    return res.cookies.find((c) => c.name === 'wb_session')!.value;
+  }
+
+  it('changes the password with the correct current password', async () => {
+    const cookie = await loginAlice(creds.password);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/change',
+      cookies: { wb_session: cookie },
+      payload: { currentPassword: creds.password, newPassword: 'newpassword123' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const oldPw = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { identifier: 'alice', password: creds.password },
+    });
+    expect(oldPw.statusCode).toBe(401);
+
+    const newPw = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { identifier: 'alice', password: 'newpassword123' },
+    });
+    expect(newPw.statusCode).toBe(200);
+  });
+
+  it('rejects a change with the wrong current password', async () => {
+    const cookie = await loginAlice('newpassword123');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/change',
+      cookies: { wb_session: cookie },
+      payload: { currentPassword: 'wrong-password', newPassword: 'anotherpass123' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('invalid_password');
+  });
+
+  it('emails a reset link and resets the password', async () => {
+    const forgot = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/forgot',
+      payload: { email: creds.email },
+    });
+    expect(forgot.statusCode).toBe(200);
+    expect(captured.resetUrl).toContain('/reset-password?token=');
+
+    const token = new URL(captured.resetUrl!).searchParams.get('token')!;
+    const reset = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/reset',
+      payload: { token, newPassword: 'resetpass123' },
+    });
+    expect(reset.statusCode).toBe(200);
+
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { identifier: 'alice', password: 'resetpass123' },
+    });
+    expect(login.statusCode).toBe(200);
+  });
+
+  it('answers forgot the same way for an unknown email (no enumeration)', async () => {
+    captured.resetUrl = undefined;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/forgot',
+      payload: { email: 'nobody@nowhere.test' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(captured.resetUrl).toBeUndefined();
+  });
+
+  it('rejects a reused reset token', async () => {
+    const forgot = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/forgot',
+      payload: { email: creds.email },
+    });
+    expect(forgot.statusCode).toBe(200);
+    const token = new URL(captured.resetUrl!).searchParams.get('token')!;
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/reset',
+      payload: { token, newPassword: 'finalpass123' },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/reset',
+      payload: { token, newPassword: 'sneakypass123' },
+    });
+    expect(second.statusCode).toBe(400);
+    expect(second.json().error).toBe('invalid_token');
   });
 });

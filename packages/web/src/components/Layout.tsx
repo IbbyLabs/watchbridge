@@ -1,41 +1,23 @@
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
-import { IconLink, IconSync } from './icons.tsx';
+import { IconLink, IconSettings, IconSync } from './icons.tsx';
+import { Logo } from './Logo.tsx';
 import { useSession } from '../lib/session.tsx';
 
-const NAV = [
+const PRIMARY = [
   { to: '/syncs', label: 'Syncs', icon: IconSync },
   { to: '/connections', label: 'Connections', icon: IconLink },
 ];
 
+// The mobile tab bar carries Settings too, since there's no room for a sidebar.
+const TABS = [...PRIMARY, { to: '/settings', label: 'Settings', icon: IconSettings }];
+
 function Wordmark() {
   return (
-    <span className="inline-flex items-center gap-2 text-[15px] font-bold tracking-tight text-ink">
-      <span className="h-2.5 w-2.5 rounded-[3px] bg-brand" aria-hidden />
+    <span className="inline-flex items-center gap-2.5 text-[15px] font-bold tracking-tight text-ink">
+      <Logo className="h-6 w-6" />
       Watchbridge
     </span>
-  );
-}
-
-function NavItems({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    <>
-      {NAV.map(({ to, label, icon: Icon }) => (
-        <NavLink
-          key={to}
-          to={to}
-          onClick={onNavigate}
-          className={({ isActive }) =>
-            `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              isActive ? 'bg-elevated text-ink' : 'text-muted hover:text-ink hover:bg-elevated/60'
-            }`
-          }
-        >
-          <Icon className="text-base" />
-          {label}
-        </NavLink>
-      ))}
-    </>
   );
 }
 
@@ -49,25 +31,61 @@ export function Layout({ children }: { children: ReactNode }) {
           <Wordmark />
         </div>
         <nav className="mt-4 flex flex-1 flex-col gap-1">
-          <NavItems />
+          {PRIMARY.map(({ to, label, icon: Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive ? 'bg-elevated text-ink' : 'text-muted hover:bg-elevated/60 hover:text-ink'
+                }`
+              }
+            >
+              <Icon className="text-base" />
+              {label}
+            </NavLink>
+          ))}
         </nav>
-        <NavLink to="/settings" className="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated hover:text-ink">
-          {user?.username ?? user?.email ?? 'Settings'}
+        <NavLink
+          to="/settings"
+          className={({ isActive }) =>
+            `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
+              isActive ? 'bg-elevated text-ink' : 'text-muted hover:bg-elevated hover:text-ink'
+            }`
+          }
+        >
+          <IconSettings className="text-base" />
+          <span className="truncate">{user?.username ?? user?.email ?? 'Settings'}</span>
         </NavLink>
       </aside>
 
-      {/* Mobile top bar */}
-      <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-border bg-surface/90 px-4 py-3 backdrop-blur md:hidden">
+      {/* Mobile top bar: brand only, so nothing can overflow. */}
+      <header className="sticky top-0 z-30 flex items-center border-b border-border bg-surface/90 px-4 py-3 backdrop-blur md:hidden">
         <Wordmark />
-        <nav className="ml-auto flex items-center gap-1">
-          <NavItems />
-          <NavLink to="/settings" className="rounded-lg px-3 py-2 text-sm text-muted hover:text-ink">
-            Settings
-          </NavLink>
-        </nav>
       </header>
 
-      <main className="mx-auto w-full max-w-4xl px-4 py-8 md:px-8">{children}</main>
+      <main className="mx-auto w-full max-w-4xl px-4 pb-28 pt-6 md:px-8 md:py-8 md:pb-8">{children}</main>
+
+      {/* Mobile bottom tab bar: thumb-reachable, never overflows. */}
+      <nav
+        aria-label="Primary"
+        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t border-border bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+      >
+        {TABS.map(({ to, label, icon: Icon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            className={({ isActive }) =>
+              `flex flex-col items-center gap-1 py-2.5 text-[11px] font-medium transition-colors ${
+                isActive ? 'text-brand' : 'text-muted'
+              }`
+            }
+          >
+            <Icon className="text-xl" />
+            {label}
+          </NavLink>
+        ))}
+      </nav>
     </div>
   );
 }

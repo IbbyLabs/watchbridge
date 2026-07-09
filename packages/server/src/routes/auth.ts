@@ -6,6 +6,7 @@ import type { RateLimiter } from '../plugins/rateLimit.js';
 import {
   clearSessionCookie,
   requireAuth,
+  SESSION_COOKIE,
   setSessionCookie,
 } from '../plugins/auth.js';
 
@@ -24,6 +25,18 @@ const registerBody = z.object({
 const loginBody = z.object({
   identifier: z.string().min(1).max(254),
   password: z.string().min(1).max(200),
+});
+
+const changePasswordBody = z.object({
+  currentPassword: z.string().min(1).max(200),
+  newPassword: z.string().min(8).max(200),
+});
+
+const forgotBody = z.object({ email: z.string().email().max(254) });
+
+const resetBody = z.object({
+  token: z.string().min(1).max(200),
+  newPassword: z.string().min(8).max(200),
 });
 
 export function authRoutes(
@@ -92,6 +105,53 @@ export function authRoutes(
   app.get('/api/auth/me', { preHandler: requireAuth }, async (request, reply) => {
     return reply.send(publicUser(request.user!));
   });
+
+  app.post('/api/auth/password/change', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = changePasswordBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
+    }
+    try {
+      await auth.changePassword(
+        request.user!.id,
+        request.cookies[SESSION_COOKIE]!,
+        parsed.data.currentPassword,
+        parsed.data.newPassword,
+      );
+      return reply.send({ status: 'ok' });
+    } catch (err) {
+      return sendAuthError(reply, err);
+    }
+  });
+
+  app.post(
+    '/api/auth/password/forgot',
+    { preHandler: limiter.middleware({ name: 'forgot', max: 5, windowMs: 3_600_000 }) },
+    async (request, reply) => {
+      const parsed = forgotBody.safeParse(request.body);
+      // Always answer the same way so the endpoint can't be used to probe which
+      // emails have accounts.
+      if (parsed.success) await auth.requestPasswordReset(parsed.data.email);
+      return reply.send({ status: 'ok' });
+    },
+  );
+
+  app.post(
+    '/api/auth/password/reset',
+    { preHandler: limiter.middleware({ name: 'reset', max: 10, windowMs: 3_600_000 }) },
+    async (request, reply) => {
+      const parsed = resetBody.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
+      }
+      try {
+        await auth.resetPassword(parsed.data.token, parsed.data.newPassword);
+        return reply.send({ status: 'ok' });
+      } catch (err) {
+        return sendAuthError(reply, err);
+      }
+    },
+  );
 }
 
 function publicUser(user: {
