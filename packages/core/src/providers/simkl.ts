@@ -27,6 +27,9 @@ interface SimklMovieItem {
 }
 interface SimklShowItem {
   last_watched_at?: string;
+  status?: string; // watching | completed | hold | dropped | plantowatch
+  watched_episodes_count?: number;
+  total_episodes_count?: number;
   show: { title?: string; year?: number; ids: SimklIdBlock };
   seasons?: Array<{ number: number; episodes?: Array<{ number: number }> }>;
 }
@@ -194,22 +197,32 @@ export class SimklClient {
       });
     }
 
+    // Read every status, not just "completed": Simkl only enumerates episodes for
+    // shows you're mid-way through ("watching"); a fully-watched show reports
+    // watched==total with no season/episode list. So enumerated episodes become
+    // episode events, and a completed show becomes a whole-show marker.
     for (const type of ['shows', 'anime'] as const) {
       const res = await this.http
-        .get<Record<string, SimklShowItem[]>>(`/sync/all-items/${type}/completed?extended=full${delta}`)
+        .get<Record<string, SimklShowItem[]>>(`/sync/all-items/${type}?extended=full${delta}`)
         .catch(() => ({}) as Record<string, SimklShowItem[]>);
       const items = res[type] ?? res.shows ?? [];
       for (const s of items) {
         const ids = toIds(s.show.ids);
-        for (const season of s.seasons ?? []) {
-          for (const ep of season.episodes ?? []) {
-            out.push({
-              // Simkl exposes no reliable per-episode date — record the play with
-              // an unknown date (null) rather than inventing one. Stable across runs.
-              ref: { kind: 'episode', ids, season: season.number, number: ep.number, title: s.show.title },
-              watchedAt: null,
-            });
+        const enumerated = (s.seasons ?? []).some((se) => (se.episodes ?? []).length > 0);
+        if (enumerated) {
+          for (const season of s.seasons ?? []) {
+            for (const ep of season.episodes ?? []) {
+              out.push({
+                // Simkl exposes no reliable per-episode date — record the play with
+                // an unknown date (null) rather than inventing one. Stable across runs.
+                ref: { kind: 'episode', ids, season: season.number, number: ep.number, title: s.show.title },
+                watchedAt: null,
+              });
+            }
           }
+        } else if (s.status === 'completed') {
+          // Whole series watched, episodes not listed by Simkl.
+          out.push({ ref: { kind: 'show', ids, title: s.show.title }, watchedAt: s.last_watched_at ?? null });
         }
       }
     }
@@ -232,6 +245,7 @@ export class SimklClient {
   async pushHistory(events: WatchEvent[]): Promise<PushResult> {
     const result = emptyPushResult();
     const movies: Array<Record<string, unknown>> = [];
+    const wholeShows: Array<Record<string, unknown>> = [];
     const showsByKey = new Map<string, { ids: ExternalIds; seasons: Map<number, Set<number>> }>();
 
     for (const e of events) {
@@ -241,6 +255,14 @@ export class SimklClient {
           continue;
         }
         movies.push({ watched_at: e.watchedAt ?? undefined, ids: e.ref.ids });
+      } else if (e.ref.kind === 'show') {
+        // Whole series watched — send the show with no seasons so Simkl marks all
+        // aired episodes.
+        if (!hasId(e.ref.ids)) {
+          result.notFound++;
+          continue;
+        }
+        wholeShows.push({ ids: e.ref.ids });
       } else {
         if (e.ref.season === undefined || e.ref.number === undefined || !hasId(e.ref.ids)) {
           result.notFound++;
@@ -255,19 +277,26 @@ export class SimklClient {
       }
     }
 
-    const shows = [...showsByKey.values()].map((s) => ({
-      ids: s.ids,
-      seasons: [...s.seasons.entries()].map(([number, eps]) => ({
-        number,
-        episodes: [...eps].map((n) => ({ number: n })),
+    const shows = [
+      ...wholeShows,
+      ...[...showsByKey.values()].map((s) => ({
+        ids: s.ids,
+        seasons: [...s.seasons.entries()].map(([number, eps]) => ({
+          number,
+          episodes: [...eps].map((n) => ({ number: n })),
+        })),
       })),
-    }));
+    ];
 
     if (movies.length === 0 && shows.length === 0) return result;
 
     try {
       await this.http.post('/sync/history', { movies, shows });
-      result.added = movies.length + shows.reduce((a, s) => a + s.seasons.reduce((b, x) => b + x.episodes.length, 0), 0);
+      const episodeAdds = [...showsByKey.values()].reduce(
+        (a, s) => a + [...s.seasons.values()].reduce((b, eps) => b + eps.size, 0),
+        0,
+      );
+      result.added = movies.length + wholeShows.length + episodeAdds;
     } catch {
       result.failed = events.length;
     }

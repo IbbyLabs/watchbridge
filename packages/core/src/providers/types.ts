@@ -19,8 +19,10 @@ export interface ExternalIds {
 
 /** A reference to a watchable item: a movie, or a specific episode of a show. */
 export interface MediaRef {
-  kind: 'movie' | 'episode';
-  /** Movie ids, or (for an episode) the parent show's ids. */
+  /** `show` means the entire series is watched (used when a provider reports a
+   *  show as fully completed without enumerating its episodes, e.g. Simkl). */
+  kind: 'movie' | 'episode' | 'show';
+  /** Movie ids, or (for an episode/show) the show's ids. */
   ids: ExternalIds;
   /** Episode only. */
   season?: number;

@@ -91,6 +91,11 @@ export class PmdbClient {
   async pushHistory(events: WatchEvent[]): Promise<PushResult> {
     const result = emptyPushResult();
     for (const event of events) {
+      // PMDB history is per movie/episode; a whole-show marker can't be expressed.
+      if (event.ref.kind === 'show') {
+        result.notFound++;
+        continue;
+      }
       const tmdb = await this.resolveTmdb(event.ref);
       if (!tmdb) {
         result.notFound++;

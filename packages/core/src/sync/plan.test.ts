@@ -70,6 +70,41 @@ describe('planHistorySync', () => {
     expect(plan.toAdd).toHaveLength(1);
     expect(plan.skippedDuplicate).toBe(1);
   });
+
+  // A provider may report a fully-watched series as a whole-show marker instead
+  // of listing episodes (Simkl). These must reconcile against per-episode data so
+  // syncs converge instead of re-adding every run.
+  const show = (tmdb: number): WatchEvent => ({ ref: { kind: 'show', ids: { tmdb } }, watchedAt: null });
+
+  it('treats episodes as present when the target has the whole show marked watched', () => {
+    const source = [episode(1399, 1, 1), episode(1399, 2, 3)];
+    const plan = planHistorySync(source, [show(1399)]);
+    expect(plan.toAdd).toHaveLength(0);
+    expect(plan.skippedPresent).toBe(2);
+  });
+
+  it('treats a whole-show marker as present when the target already has its episodes', () => {
+    const plan = planHistorySync([show(1399)], [episode(1399, 1, 1)]);
+    expect(plan.toAdd).toHaveLength(0);
+    expect(plan.skippedPresent).toBe(1);
+  });
+
+  it('does not mark unrelated episodes present from a different show marker', () => {
+    const plan = planHistorySync([episode(1399, 1, 1)], [show(1400)]);
+    expect(plan.toAdd).toHaveLength(1);
+  });
+
+  it('converges: a completed-show target plans zero on the second run', () => {
+    // First sync pushes episodes; the target then reports the series as completed
+    // (no episodes enumerated). The re-run must plan nothing, not re-add.
+    const source = [episode(1399, 1, 1), episode(1399, 1, 2), episode(1399, 2, 1)];
+    const first = planHistorySync(source, []);
+    expect(first.toAdd).toHaveLength(3);
+    const targetAfter = [show(1399)];
+    const second = planHistorySync(source, targetAfter);
+    expect(second.toAdd).toHaveLength(0);
+    expect(second.skippedPresent).toBe(3);
+  });
 });
 
 describe('planProgressSync', () => {

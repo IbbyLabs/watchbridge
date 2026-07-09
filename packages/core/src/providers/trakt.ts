@@ -281,6 +281,7 @@ export class TraktClient {
   async pushHistory(events: WatchEvent[]): Promise<PushResult> {
     const result = emptyPushResult();
     const movies: Array<Record<string, unknown>> = [];
+    const wholeShows: Array<Record<string, unknown>> = [];
     const showsByKey = new Map<string, { ids: ExternalIds; seasons: Map<number, Array<{ number: number; watched_at: string | null }>> }>();
 
     for (const e of events) {
@@ -290,6 +291,13 @@ export class TraktClient {
           continue;
         }
         movies.push({ watched_at: e.watchedAt ?? undefined, ids: writableIds(e.ref.ids) });
+      } else if (e.ref.kind === 'show') {
+        // Whole series watched — Trakt marks every aired episode.
+        if (!hasWritableId(e.ref.ids)) {
+          result.notFound++;
+          continue;
+        }
+        wholeShows.push({ ids: writableIds(e.ref.ids) });
       } else {
         if (e.ref.season === undefined || e.ref.number === undefined || !hasWritableId(e.ref.ids)) {
           result.notFound++;
@@ -304,13 +312,16 @@ export class TraktClient {
       }
     }
 
-    const shows = [...showsByKey.values()].map((s) => ({
-      ids: s.ids,
-      seasons: [...s.seasons.entries()].map(([number, eps]) => ({
-        number,
-        episodes: eps.map((ep) => ({ number: ep.number, watched_at: ep.watched_at ?? undefined })),
+    const shows = [
+      ...wholeShows,
+      ...[...showsByKey.values()].map((s) => ({
+        ids: s.ids,
+        seasons: [...s.seasons.entries()].map(([number, eps]) => ({
+          number,
+          episodes: eps.map((ep) => ({ number: ep.number, watched_at: ep.watched_at ?? undefined })),
+        })),
       })),
-    }));
+    ];
 
     if (movies.length === 0 && shows.length === 0) return result;
 
