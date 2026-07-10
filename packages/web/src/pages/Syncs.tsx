@@ -80,6 +80,8 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
   const [outcome, setOutcome] = useState<RunOutcome | null>(null);
   const [busy, setBusy] = useState<'preview' | 'run' | null>(null);
   const [runs, setRuns] = useState<SyncRun[] | null>(null);
+  const now = useNow();
+  const nextAt = nextRunAt(sync);
 
   const act = async (mode: 'preview' | 'run') => {
     setBusy(mode);
@@ -128,6 +130,7 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
         {sync.intervalMinutes && (
           <Pill tone="neutral">
             <IconClock className="text-[11px]" /> every {formatInterval(sync.intervalMinutes)}
+            {nextAt !== null && <span className="text-faint"> · next {formatNextRun(nextAt, now)}</span>}
           </Pill>
         )}
         <div className="ml-auto flex items-center gap-2">
@@ -320,4 +323,30 @@ function formatInterval(minutes: number): string {
   if (minutes % 1440 === 0) return `${minutes / 1440}d`;
   if (minutes % 60 === 0) return `${minutes / 60}h`;
   return `${minutes}m`;
+}
+
+/** A ticking clock so relative times stay current without a page refresh. */
+function useNow(intervalMs = 30_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+/** When the scheduler will next run this sync, or null if it won't (paused / manual). */
+function nextRunAt(sync: Sync): number | null {
+  if (!sync.enabled || !sync.intervalMinutes) return null;
+  const last = sync.lastRunAt ? new Date(sync.lastRunAt).getTime() : 0;
+  return last + sync.intervalMinutes * 60_000;
+}
+
+function formatNextRun(atMs: number, now: number): string {
+  const mins = Math.round((atMs - now) / 60_000);
+  if (mins <= 0) return 'due now';
+  if (mins < 60) return `in ${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `in ${h}h ${m}m` : `in ${h}h`;
 }
