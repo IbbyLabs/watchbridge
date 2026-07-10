@@ -1,0 +1,29 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The default GITHUB_TOKEN can't fire the tag-triggered Docker build, so
+      # dispatch it explicitly once a release is cut. workflow_dispatch is
+      # permitted from GITHUB_TOKEN, unlike the push-tag event.
+      - name: Build Docker image for the release
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: gh workflow run deploy-docker.yml --repo "${GITHUB_REPOSITORY}" -f ref="${TAG_NAME}"
