@@ -22,14 +22,18 @@ RUN pnpm --filter=@watchbridge/server deploy --prod --legacy /prod/app \
 
 # ---- runtime stage ----
 FROM node:22-bookworm-slim AS runtime
-# Injected from the release tag by CI (falls back to a dev marker locally).
-ARG APP_VERSION=0.0.0-dev
-ENV NODE_ENV=production PORT=8080 APP_VERSION=${APP_VERSION}
+ENV NODE_ENV=production PORT=8080
 WORKDIR /app
 COPY --from=build --chown=node:node /prod/app /app
 # Pre-create the data dir owned by the runtime user so an anonymous volume
 # inherits writable ownership.
 RUN mkdir -p /app/data && chown node:node /app/data
+# Injected from the release tag by CI (falls back to a dev marker locally).
+# Kept after the COPY so the per-release app layer busts this layer's cache —
+# an ENV placed before the COPY gets served stale from the build cache, baking
+# the previous release's version into the new image.
+ARG APP_VERSION=0.0.0-dev
+ENV APP_VERSION=${APP_VERSION}
 USER node
 EXPOSE 8080
 VOLUME ["/app/data"]
