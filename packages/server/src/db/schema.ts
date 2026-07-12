@@ -46,10 +46,7 @@ export const emailVerificationTokens = pgTable(
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [
-    uniqueIndex('evt_token_hash_uniq').on(t.tokenHash),
-    index('evt_user_idx').on(t.userId),
-  ],
+  (t) => [uniqueIndex('evt_token_hash_uniq').on(t.tokenHash), index('evt_user_idx').on(t.userId)],
 );
 
 export const passwordResetTokens = pgTable(
@@ -64,10 +61,7 @@ export const passwordResetTokens = pgTable(
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [
-    uniqueIndex('prt_token_hash_uniq').on(t.tokenHash),
-    index('prt_user_idx').on(t.userId),
-  ],
+  (t) => [uniqueIndex('prt_token_hash_uniq').on(t.tokenHash), index('prt_user_idx').on(t.userId)],
 );
 
 export const sessions = pgTable(
@@ -93,7 +87,7 @@ export const connections = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    provider: text('provider').notNull(), // 'trakt' | 'simkl' | 'pmdb'
+    provider: text('provider').notNull(), // 'trakt' | 'simkl' | 'pmdb' | 'mdblist'
     /** Display name for the linked account. */
     label: text('label'),
     /** AES-256-GCM encrypted JSON credential blob (tokens or api key). */

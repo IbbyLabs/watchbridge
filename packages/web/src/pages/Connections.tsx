@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api.ts';
-import { PROVIDER_LABEL, type Connection, type ProviderId, type ProviderStatus } from '../lib/types.ts';
+import {
+  PROVIDER_LABEL,
+  type Connection,
+  type ProviderId,
+  type ProviderStatus,
+} from '../lib/types.ts';
 import { Button, Card, Field, Input, Modal, Pill, Spinner } from '../components/ui.tsx';
 import { IconCheck, IconTrash } from '../components/icons.tsx';
 
@@ -9,6 +14,7 @@ const DESCRIPTIONS: Record<ProviderId, string> = {
   trakt: 'Watch history, ratings and progress.',
   simkl: 'History and lists (progress limited).',
   pmdb: 'History, resume points and lists.',
+  mdblist: 'History, resume points and watchlist.',
 };
 
 export function Connections() {
@@ -69,7 +75,10 @@ export function Connections() {
       )}
       {errorParam && (
         <div className="mb-4 flex items-center justify-between rounded-lg bg-danger/15 px-3 py-2 text-sm text-danger">
-          <span>Couldn’t connect {PROVIDER_LABEL[errorParam as ProviderId] ?? errorParam}. Please try again.</span>
+          <span>
+            Couldn’t connect {PROVIDER_LABEL[errorParam as ProviderId] ?? errorParam}. Please try
+            again.
+          </span>
           <button onClick={clearBanner} className="text-xs opacity-80 hover:opacity-100">
             Dismiss
           </button>
@@ -94,25 +103,38 @@ export function Connections() {
                         <IconCheck className="text-[11px]" /> {conn.label ?? 'Connected'}
                       </Pill>
                     )}
-                    {!configured && provider !== 'pmdb' && <Pill tone="neutral">Not configured</Pill>}
+                    {!configured && !isKeyProvider(provider) && (
+                      <Pill tone="neutral">Not configured</Pill>
+                    )}
                   </div>
                   <p className="mt-0.5 truncate text-sm text-muted">{DESCRIPTIONS[provider]}</p>
                 </div>
                 {conn ? (
-                  <Button variant="danger" onClick={() => disconnect(conn.id)} aria-label={`Disconnect ${PROVIDER_LABEL[provider]}`}>
+                  <Button
+                    variant="danger"
+                    onClick={() => disconnect(conn.id)}
+                    aria-label={`Disconnect ${PROVIDER_LABEL[provider]}`}
+                  >
                     <IconTrash /> Disconnect
                   </Button>
-                ) : provider !== 'pmdb' && redirect ? (
+                ) : !isKeyProvider(provider) && redirect ? (
                   <div className="flex flex-col items-end gap-1">
                     <Button variant="secondary" onClick={() => connectRedirect(provider)}>
                       Connect
                     </Button>
-                    <button onClick={() => setLinking(provider)} className="text-xs text-faint transition-colors hover:text-muted">
+                    <button
+                      onClick={() => setLinking(provider)}
+                      className="text-xs text-faint transition-colors hover:text-muted"
+                    >
                       Use a code instead
                     </button>
                   </div>
                 ) : (
-                  <Button variant="secondary" disabled={!configured} onClick={() => setLinking(provider)}>
+                  <Button
+                    variant="secondary"
+                    disabled={!configured}
+                    onClick={() => setLinking(provider)}
+                  >
                     Connect
                   </Button>
                 )}
@@ -125,8 +147,26 @@ export function Connections() {
       {linking === 'trakt' && (
         <DeviceModal
           title="Connect Trakt"
-          start={() => api.post<{ userCode: string; verificationUrl: string; deviceCode: string; interval: number }>('/api/connections/trakt/device').then((r) => ({ userCode: r.userCode, url: r.verificationUrl, pollToken: r.deviceCode, interval: r.interval }))}
-          poll={(t) => api.post<{ status: string }>('/api/connections/trakt/device/poll', { deviceCode: t }).then((r) => r.status)}
+          start={() =>
+            api
+              .post<{
+                userCode: string;
+                verificationUrl: string;
+                deviceCode: string;
+                interval: number;
+              }>('/api/connections/trakt/device')
+              .then((r) => ({
+                userCode: r.userCode,
+                url: r.verificationUrl,
+                pollToken: r.deviceCode,
+                interval: r.interval,
+              }))
+          }
+          poll={(t) =>
+            api
+              .post<{ status: string }>('/api/connections/trakt/device/poll', { deviceCode: t })
+              .then((r) => r.status)
+          }
           onClose={() => setLinking(null)}
           onDone={() => {
             setLinking(null);
@@ -137,8 +177,23 @@ export function Connections() {
       {linking === 'simkl' && (
         <DeviceModal
           title="Connect Simkl"
-          start={() => api.post<{ userCode: string; verificationUrl: string; interval: number }>('/api/connections/simkl/pin').then((r) => ({ userCode: r.userCode, url: r.verificationUrl, pollToken: r.userCode, interval: r.interval }))}
-          poll={(t) => api.post<{ status: string }>('/api/connections/simkl/pin/poll', { userCode: t }).then((r) => r.status)}
+          start={() =>
+            api
+              .post<{ userCode: string; verificationUrl: string; interval: number }>(
+                '/api/connections/simkl/pin',
+              )
+              .then((r) => ({
+                userCode: r.userCode,
+                url: r.verificationUrl,
+                pollToken: r.userCode,
+                interval: r.interval,
+              }))
+          }
+          poll={(t) =>
+            api
+              .post<{ status: string }>('/api/connections/simkl/pin/poll', { userCode: t })
+              .then((r) => r.status)
+          }
           onClose={() => setLinking(null)}
           onDone={() => {
             setLinking(null);
@@ -146,8 +201,9 @@ export function Connections() {
           }}
         />
       )}
-      {linking === 'pmdb' && (
-        <PmdbModal
+      {(linking === 'pmdb' || linking === 'mdblist') && (
+        <ApiKeyModal
+          provider={linking}
           onClose={() => setLinking(null)}
           onDone={() => {
             setLinking(null);
@@ -190,20 +246,23 @@ function DeviceModal({
         if (!active) return;
         setState(s);
         setStatus('waiting');
-        timer.current = setInterval(async () => {
-          try {
-            const st = await poll(s.pollToken);
-            if (st === 'connected') {
-              clearInterval(timer.current);
-              onDone();
-            } else if (st === 'expired' || st === 'denied') {
-              clearInterval(timer.current);
-              setStatus('error');
+        timer.current = setInterval(
+          async () => {
+            try {
+              const st = await poll(s.pollToken);
+              if (st === 'connected') {
+                clearInterval(timer.current);
+                onDone();
+              } else if (st === 'expired' || st === 'denied') {
+                clearInterval(timer.current);
+                setStatus('error');
+              }
+            } catch {
+              /* keep polling */
             }
-          } catch {
-            /* keep polling */
-          }
-        }, Math.max(3, s.interval) * 1000);
+          },
+          Math.max(3, s.interval) * 1000,
+        );
       })
       .catch(() => setStatus('error'));
     return () => {
@@ -220,13 +279,20 @@ function DeviceModal({
           <Spinner /> Preparing…
         </div>
       )}
-      {status === 'error' && <p className="text-sm text-danger">Couldn’t link the account. Please try again.</p>}
+      {status === 'error' && (
+        <p className="text-sm text-danger">Couldn’t link the account. Please try again.</p>
+      )}
       {state && status === 'waiting' && (
         <div className="space-y-4">
           <ol className="space-y-2 text-sm text-muted">
             <li>
               1. Open{' '}
-              <a href={state.url} target="_blank" rel="noreferrer" className="font-medium text-brand hover:underline">
+              <a
+                href={state.url}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-brand hover:underline"
+              >
                 {state.url.replace('https://', '')}
               </a>
             </li>
@@ -244,17 +310,44 @@ function DeviceModal({
   );
 }
 
-function PmdbModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+type KeyProvider = 'pmdb' | 'mdblist';
+
+const isKeyProvider = (provider: ProviderId): provider is KeyProvider =>
+  provider === 'pmdb' || provider === 'mdblist';
+
+const KEY_PROVIDERS: Record<KeyProvider, { title: string; hint: string; placeholder: string }> = {
+  pmdb: {
+    title: 'Connect PublicMetaDB',
+    hint: 'Create one in PublicMetaDB under Settings → API.',
+    placeholder: 'pm-…',
+  },
+  mdblist: {
+    title: 'Connect MDBList',
+    hint: 'Find your API key at mdblist.com/preferences.',
+    placeholder: 'Your MDBList API key',
+  },
+};
+
+function ApiKeyModal({
+  provider,
+  onClose,
+  onDone,
+}: {
+  provider: KeyProvider;
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const meta = KEY_PROVIDERS[provider];
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      await api.post('/api/connections/pmdb', { apiKey });
+      await api.post(`/api/connections/${provider}`, { apiKey });
       onDone();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not validate the key');
@@ -264,10 +357,15 @@ function PmdbModal({ onClose, onDone }: { onClose: () => void; onDone: () => voi
   };
 
   return (
-    <Modal title="Connect PublicMetaDB" onClose={onClose}>
+    <Modal title={meta.title} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
-        <Field label="API key" hint="Create one in PublicMetaDB under Settings → API." error={error ?? undefined}>
-          <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="pm-…" autoFocus />
+        <Field label="API key" hint={meta.hint} error={error ?? undefined}>
+          <Input
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={meta.placeholder}
+            autoFocus
+          />
         </Field>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>

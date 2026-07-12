@@ -18,9 +18,15 @@ export { loadConfig, ConfigStartupError, type AppConfig, type RawEnv } from './c
 // Providers
 export * from './providers/types.js';
 export { HttpClient, HttpError } from './providers/http.js';
-export { TraktClient, type TraktTokens, type TraktConfig, type DeviceCode } from './providers/trakt.js';
+export {
+  TraktClient,
+  type TraktTokens,
+  type TraktConfig,
+  type DeviceCode,
+} from './providers/trakt.js';
 export { SimklClient, type SimklConfig, type SimklPin } from './providers/simkl.js';
 export { PmdbClient } from './providers/pmdb.js';
+export { MdblistClient } from './providers/mdblist.js';
 
 // Sync engine
 export { idStrings, itemKey, hasIdentity, MatchIndex } from './sync/identity.js';

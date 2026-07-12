@@ -1,6 +1,6 @@
 /** Provider-agnostic domain types shared by the clients and the sync engine. */
 
-export type ProviderId = 'trakt' | 'simkl' | 'pmdb';
+export type ProviderId = 'trakt' | 'simkl' | 'pmdb' | 'mdblist';
 
 export type DataType = 'history' | 'progress' | 'ratings' | 'watchlist';
 

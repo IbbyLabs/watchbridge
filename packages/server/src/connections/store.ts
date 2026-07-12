@@ -19,7 +19,11 @@ export interface PmdbCreds {
   kind: 'pmdb';
   apiKey: string;
 }
-export type Credentials = TraktCreds | SimklCreds | PmdbCreds;
+export interface MdblistCreds {
+  kind: 'mdblist';
+  apiKey: string;
+}
+export type Credentials = TraktCreds | SimklCreds | PmdbCreds | MdblistCreds;
 
 /** Connection with no secret material — safe to return to the client. */
 export interface PublicConnection {
@@ -65,7 +69,13 @@ export class ConnectionStore {
     if (existing) {
       await this.db.orm
         .update(connections)
-        .set({ credentials: encrypted, label, status: 'active', updatedAt: new Date(), lastValidatedAt: new Date() })
+        .set({
+          credentials: encrypted,
+          label,
+          status: 'active',
+          updatedAt: new Date(),
+          lastValidatedAt: new Date(),
+        })
         .where(eq(connections.id, existing.id));
       return toPublic({ ...existing, label, status: 'active', credentials: encrypted });
     }
@@ -93,7 +103,10 @@ export class ConnectionStore {
   }
 
   /** Load and decrypt a user's credentials for a provider. */
-  async getCreds(userId: string, provider: ProviderId): Promise<{ id: string; creds: Credentials } | null> {
+  async getCreds(
+    userId: string,
+    provider: ProviderId,
+  ): Promise<{ id: string; creds: Credentials } | null> {
     const row = await this.raw(userId, provider);
     if (!row) return null;
     return { id: row.id, creds: JSON.parse(this.box.decrypt(row.credentials)) as Credentials };
@@ -107,7 +120,10 @@ export class ConnectionStore {
   }
 
   async setStatus(id: string, status: 'active' | 'reauth' | 'error'): Promise<void> {
-    await this.db.orm.update(connections).set({ status, updatedAt: new Date() }).where(eq(connections.id, id));
+    await this.db.orm
+      .update(connections)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(connections.id, id));
   }
 
   async remove(userId: string, id: string): Promise<boolean> {

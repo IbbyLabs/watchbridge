@@ -1,4 +1,4 @@
-export type ProviderId = 'trakt' | 'simkl' | 'pmdb';
+export type ProviderId = 'trakt' | 'simkl' | 'pmdb' | 'mdblist';
 export type DataType = 'history' | 'progress';
 
 export interface User {
@@ -77,4 +77,5 @@ export const PROVIDER_LABEL: Record<ProviderId, string> = {
   trakt: 'Trakt',
   simkl: 'Simkl',
   pmdb: 'PublicMetaDB',
+  mdblist: 'MDBList',
 };

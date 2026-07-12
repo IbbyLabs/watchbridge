@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import {
+  MdblistClient,
   PmdbClient,
   SimklClient,
   TraktClient,
@@ -28,7 +29,10 @@ type RedirectProvider = 'trakt' | 'simkl';
 
 /** Short-lived, single-use OAuth `state` values bound to a user (CSRF defence). */
 class OAuthStateStore {
-  private readonly map = new Map<string, { userId: string; provider: RedirectProvider; expiresAt: number }>();
+  private readonly map = new Map<
+    string,
+    { userId: string; provider: RedirectProvider; expiresAt: number }
+  >();
 
   create(userId: string, provider: RedirectProvider): string {
     const state = randomBytes(24).toString('base64url');
@@ -59,9 +63,10 @@ export class ConnectionService {
   private readonly states = new OAuthStateStore();
 
   isConfigured(provider: ProviderId): boolean {
-    if (provider === 'trakt') return Boolean(this.config.TRAKT_CLIENT_ID && this.config.TRAKT_CLIENT_SECRET);
+    if (provider === 'trakt')
+      return Boolean(this.config.TRAKT_CLIENT_ID && this.config.TRAKT_CLIENT_SECRET);
     if (provider === 'simkl') return Boolean(this.config.SIMKL_CLIENT_ID);
-    return true; // pmdb is per-user key, always available
+    return true; // pmdb and mdblist are per-user keys, always available
   }
 
   /** Whether the redirect (authorization-code) flow is available — needs a secret. */
@@ -87,7 +92,11 @@ export class ConnectionService {
   }
 
   /** Handle the callback: validate state, exchange the code, store the connection. */
-  async completeRedirect(state: string, code: string, currentUserId: string): Promise<RedirectProvider> {
+  async completeRedirect(
+    state: string,
+    code: string,
+    currentUserId: string,
+  ): Promise<RedirectProvider> {
     const entry = this.states.consume(state);
     if (!entry || entry.userId !== currentUserId) throw new OAuthStateError();
     const uri = this.redirectUri(entry.provider);
@@ -157,6 +166,14 @@ export class ConnectionService {
     return this.store.upsert(userId, 'pmdb', 'PublicMetaDB', { kind: 'pmdb', apiKey });
   }
 
+  // ── MDBList api key ───────────────────────────────────────────────
+
+  async connectMdblist(userId: string, apiKey: string): Promise<PublicConnection> {
+    const ok = await new MdblistClient(apiKey).validate();
+    if (!ok) throw new InvalidApiKey();
+    return this.store.upsert(userId, 'mdblist', 'MDBList', { kind: 'mdblist', apiKey });
+  }
+
   // ── Connected clients (for the sync engine) ──────────────────────
 
   async traktFor(userId: string): Promise<TraktClient | null> {
@@ -164,7 +181,11 @@ export class ConnectionService {
     if (!c || c.creds.kind !== 'trakt') return null;
     const connId = c.id;
     return this.newTrakt(
-      { accessToken: c.creds.accessToken, refreshToken: c.creds.refreshToken, expiresAt: c.creds.expiresAt },
+      {
+        accessToken: c.creds.accessToken,
+        refreshToken: c.creds.refreshToken,
+        expiresAt: c.creds.expiresAt,
+      },
       (tokens) => this.store.updateCreds(connId, { kind: 'trakt', ...tokens }),
     );
   }
@@ -181,10 +202,17 @@ export class ConnectionService {
     return new PmdbClient(c.creds.apiKey);
   }
 
+  async mdblistFor(userId: string): Promise<MdblistClient | null> {
+    const c = await this.store.getCreds(userId, 'mdblist');
+    if (!c || c.creds.kind !== 'mdblist') return null;
+    return new MdblistClient(c.creds.apiKey);
+  }
+
   /** A connected client for a provider, as the read/write port the engine uses. */
   async clientFor(userId: string, provider: ProviderId): Promise<SyncTarget | null> {
     if (provider === 'trakt') return this.traktFor(userId);
     if (provider === 'simkl') return this.simklFor(userId);
+    if (provider === 'mdblist') return this.mdblistFor(userId);
     return this.pmdbFor(userId);
   }
 
@@ -192,7 +220,11 @@ export class ConnectionService {
 
   private newTrakt(
     tokens?: { accessToken: string; refreshToken: string; expiresAt: number },
-    onRefresh?: (t: { accessToken: string; refreshToken: string; expiresAt: number }) => Promise<void>,
+    onRefresh?: (t: {
+      accessToken: string;
+      refreshToken: string;
+      expiresAt: number;
+    }) => Promise<void>,
   ): TraktClient {
     if (!this.isConfigured('trakt')) throw new ProviderNotConfigured('trakt');
     return new TraktClient({

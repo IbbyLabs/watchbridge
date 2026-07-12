@@ -3,15 +3,12 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { AppConfig, ProviderId } from '@watchbridge/core';
 import { requireAuth } from '../plugins/auth.js';
 import type { ConnectionStore } from '../connections/store.js';
-import {
-  ConnectionService,
-  InvalidApiKey,
-  ProviderNotConfigured,
-} from '../connections/service.js';
+import { ConnectionService, InvalidApiKey, ProviderNotConfigured } from '../connections/service.js';
 
 const deviceBody = z.object({ deviceCode: z.string().min(1) });
 const pinBody = z.object({ userCode: z.string().min(1) });
 const pmdbBody = z.object({ apiKey: z.string().min(10).max(200) });
+const mdblistBody = z.object({ apiKey: z.string().min(10).max(200) });
 
 export function connectionRoutes(
   app: FastifyInstance,
@@ -28,7 +25,7 @@ export function connectionRoutes(
   // Which providers the operator has configured (SPA hides unavailable ones).
   // `redirect` = the one-click browser flow is available (needs a client secret).
   app.get('/api/connections/providers', auth, async (_request, reply) => {
-    const providers: ProviderId[] = ['trakt', 'simkl', 'pmdb'];
+    const providers: ProviderId[] = ['trakt', 'simkl', 'pmdb', 'mdblist'];
     return reply.send(
       providers.map((p) => ({
         provider: p,
@@ -41,7 +38,8 @@ export function connectionRoutes(
   // Redirect (authorization-code) flow: SPA fetches the URL and navigates to it.
   app.get('/api/connections/:provider/authorize', auth, async (request, reply) => {
     const provider = (request.params as { provider: string }).provider;
-    if (provider !== 'trakt' && provider !== 'simkl') return reply.code(404).send({ error: 'not_found' });
+    if (provider !== 'trakt' && provider !== 'simkl')
+      return reply.code(404).send({ error: 'not_found' });
     try {
       return reply.send({ url: service.authorizeUrl(request.user!.id, provider) });
     } catch (err) {
@@ -53,9 +51,14 @@ export function connectionRoutes(
   // user-bound state, so it is CSRF-safe; ends in a redirect to the SPA.
   app.get('/api/connections/:provider/callback', async (request, reply) => {
     const provider = (request.params as { provider: string }).provider;
-    const { code, state, error } = request.query as { code?: string; state?: string; error?: string };
+    const { code, state, error } = request.query as {
+      code?: string;
+      state?: string;
+      error?: string;
+    };
     const back = (suffix: string) => reply.redirect(`${config.APP_URL}/connections?${suffix}`);
-    if (provider !== 'trakt' && provider !== 'simkl') return reply.code(404).send({ error: 'not_found' });
+    if (provider !== 'trakt' && provider !== 'simkl')
+      return reply.code(404).send({ error: 'not_found' });
     if (!request.user) return reply.redirect(`${config.APP_URL}/login`);
     if (error || !code || !state) return back(`error=${provider}`);
     try {
@@ -109,6 +112,20 @@ export function connectionRoutes(
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_input' });
     try {
       const connection = await service.connectPmdb(request.user!.id, parsed.data.apiKey);
+      return reply.code(201).send(connection);
+    } catch (err) {
+      if (err instanceof InvalidApiKey) {
+        return reply.code(400).send({ error: 'invalid_api_key', message: err.message });
+      }
+      return providerError(reply, err);
+    }
+  });
+
+  app.post('/api/connections/mdblist', auth, async (request, reply) => {
+    const parsed = mdblistBody.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid_input' });
+    try {
+      const connection = await service.connectMdblist(request.user!.id, parsed.data.apiKey);
       return reply.code(201).send(connection);
     } catch (err) {
       if (err instanceof InvalidApiKey) {

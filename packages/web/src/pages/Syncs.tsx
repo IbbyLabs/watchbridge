@@ -9,10 +9,26 @@ import {
   type Sync,
   type SyncRun,
 } from '../lib/types.ts';
-import { Button, Card, EmptyState, Field, Input, Modal, Pill, Select, Spinner } from '../components/ui.tsx';
-import { IconArrowRight, IconArrows, IconClock, IconPlus, IconTrash } from '../components/icons.tsx';
+import {
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  Input,
+  Modal,
+  Pill,
+  Select,
+  Spinner,
+} from '../components/ui.tsx';
+import {
+  IconArrowRight,
+  IconArrows,
+  IconClock,
+  IconPlus,
+  IconTrash,
+} from '../components/icons.tsx';
 
-const PROVIDERS: ProviderId[] = ['trakt', 'simkl', 'pmdb'];
+const PROVIDERS: ProviderId[] = ['trakt', 'simkl', 'pmdb', 'mdblist'];
 const DATA_TYPES: { id: DataType; label: string }[] = [
   { id: 'history', label: 'Watch history' },
   { id: 'progress', label: 'Playback progress' },
@@ -25,7 +41,10 @@ export function Syncs() {
   const [creating, setCreating] = useState(false);
 
   const load = async () => {
-    const [s, c] = await Promise.all([api.get<Sync[]>('/api/syncs'), api.get<Connection[]>('/api/connections')]);
+    const [s, c] = await Promise.all([
+      api.get<Sync[]>('/api/syncs'),
+      api.get<Connection[]>('/api/connections'),
+    ]);
     setSyncs(s);
     setConnections(c);
     setLoading(false);
@@ -39,7 +58,9 @@ export function Syncs() {
       <header className="mb-6 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-ink">Syncs</h1>
-          <p className="mt-1 text-sm text-muted">Move watch data between your connected accounts.</p>
+          <p className="mt-1 text-sm text-muted">
+            Move watch data between your connected accounts.
+          </p>
         </div>
         <Button onClick={() => setCreating(true)}>
           <IconPlus /> New sync
@@ -117,7 +138,11 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
         <span className="font-medium text-ink">{sync.name}</span>
         <span className="inline-flex items-center gap-1.5 text-sm text-muted">
           {PROVIDER_LABEL[sync.source]}
-          {sync.direction === 'two_way' ? <IconArrows className="text-brand" /> : <IconArrowRight className="text-brand" />}
+          {sync.direction === 'two_way' ? (
+            <IconArrows className="text-brand" />
+          ) : (
+            <IconArrowRight className="text-brand" />
+          )}
           {PROVIDER_LABEL[sync.target]}
         </span>
         <div className="flex items-center gap-1.5">
@@ -130,7 +155,9 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
         {sync.intervalMinutes && (
           <Pill tone="neutral">
             <IconClock className="text-[11px]" /> every {formatInterval(sync.intervalMinutes)}
-            {nextAt !== null && <span className="text-faint"> · next {formatNextRun(nextAt, now)}</span>}
+            {nextAt !== null && (
+              <span className="text-faint"> · next {formatNextRun(nextAt, now)}</span>
+            )}
           </Pill>
         )}
         <div className="ml-auto flex items-center gap-2">
@@ -152,7 +179,10 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
       {outcome && <OutcomeView outcome={outcome} />}
 
       <div className="mt-3 border-t border-border pt-3">
-        <button onClick={loadRuns} className="text-xs font-medium text-muted transition-colors hover:text-ink">
+        <button
+          onClick={loadRuns}
+          className="text-xs font-medium text-muted transition-colors hover:text-ink"
+        >
           {runs ? 'Hide run history' : 'Run history'}
         </button>
         {runs && (
@@ -178,7 +208,11 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
 
 function OutcomeView({ outcome }: { outcome: RunOutcome }) {
   if (outcome.status === 'error') {
-    return <p className="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{outcome.error ?? 'Run failed'}</p>;
+    return (
+      <p className="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
+        {outcome.error ?? 'Run failed'}
+      </p>
+    );
   }
   const preview = outcome.reports[0]?.preview;
   return (
@@ -228,7 +262,8 @@ function CreateSyncModal({
   const [loading, setLoading] = useState(false);
   const connectedIds = new Set(connections.map((c) => c.provider));
 
-  const toggleType = (t: DataType) => setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  const toggleType = (t: DataType) =>
+    setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -264,7 +299,11 @@ function CreateSyncModal({
     <Modal title="New sync" onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <Field label="Name" hint="Optional.">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Trakt → PublicMetaDB" />
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Trakt → PublicMetaDB"
+          />
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="From">
@@ -286,7 +325,9 @@ function CreateSyncModal({
                 type="button"
                 onClick={() => toggleType(d.id)}
                 className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
-                  types.includes(d.id) ? 'border-brand bg-brand/15 text-ink' : 'border-border text-muted hover:text-ink'
+                  types.includes(d.id)
+                    ? 'border-brand bg-brand/15 text-ink'
+                    : 'border-border text-muted hover:text-ink'
                 }`}
               >
                 {d.label}
@@ -296,13 +337,22 @@ function CreateSyncModal({
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Direction">
-            <Select value={direction} onChange={(e) => setDirection(e.target.value as 'one_way' | 'two_way')}>
+            <Select
+              value={direction}
+              onChange={(e) => setDirection(e.target.value as 'one_way' | 'two_way')}
+            >
               <option value="one_way">One-way</option>
               <option value="two_way">Two-way</option>
             </Select>
           </Field>
           <Field label="Every (minutes)" hint="Blank = manual only.">
-            <Input type="number" min={15} value={interval} onChange={(e) => setInterval(e.target.value)} placeholder="Manual" />
+            <Input
+              type="number"
+              min={15}
+              value={interval}
+              onChange={(e) => setInterval(e.target.value)}
+              placeholder="Manual"
+            />
           </Field>
         </div>
         {error && <p className="text-sm text-danger">{error}</p>}

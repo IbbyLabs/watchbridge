@@ -9,7 +9,7 @@ import { syncs, syncRuns, type Sync } from '../db/schema.js';
 import { parseDataTypes, type SyncRunner } from '../sync/runner.js';
 import type { SyncScheduler } from '../sync/scheduler.js';
 
-const provider = z.enum(['trakt', 'simkl', 'pmdb']);
+const provider = z.enum(['trakt', 'simkl', 'pmdb', 'mdblist']);
 const dataType = z.enum(['history', 'progress']);
 
 const createBody = z
@@ -21,7 +21,10 @@ const createBody = z
     direction: z.enum(['one_way', 'two_way']).default('one_way'),
     intervalMinutes: z.number().int().positive().nullable().optional(),
   })
-  .refine((v) => v.source !== v.target, { message: 'source and target must differ', path: ['target'] });
+  .refine((v) => v.source !== v.target, {
+    message: 'source and target must differ',
+    path: ['target'],
+  });
 
 const patchBody = z.object({
   name: z.string().trim().min(1).max(80).optional(),
@@ -77,7 +80,8 @@ export function syncRoutes(
 
   app.post('/api/syncs', auth, async (request, reply) => {
     const parsed = createBody.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
     const data = parsed.data;
     const id = randomUUID();
     await db.orm.insert(syncs).values({
@@ -98,7 +102,8 @@ export function syncRoutes(
     const existing = await load(request);
     if (!existing) return reply.code(404).send({ error: 'not_found' });
     const parsed = patchBody.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
     const d = parsed.data;
     await db.orm
       .update(syncs)
@@ -106,7 +111,9 @@ export function syncRoutes(
         ...(d.name !== undefined ? { name: d.name } : {}),
         ...(d.dataTypes !== undefined ? { dataTypes: JSON.stringify(d.dataTypes) } : {}),
         ...(d.direction !== undefined ? { direction: d.direction } : {}),
-        ...(d.intervalMinutes !== undefined ? { intervalMinutes: clampInterval(d.intervalMinutes) } : {}),
+        ...(d.intervalMinutes !== undefined
+          ? { intervalMinutes: clampInterval(d.intervalMinutes) }
+          : {}),
         ...(d.enabled !== undefined ? { enabled: d.enabled } : {}),
         updatedAt: new Date(),
       })

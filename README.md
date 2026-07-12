@@ -1,9 +1,9 @@
 # Watchbridge
 
 Sync watch history and playback progress between [Trakt](https://trakt.tv),
-[Simkl](https://simkl.com) and [PublicMetaDB](https://publicmetadb.com) — on a schedule or on
-demand. Connect your accounts, pick what to sync and in which direction, and Watchbridge keeps
-them in step.
+[Simkl](https://simkl.com), [PublicMetaDB](https://publicmetadb.com) and
+[MDBList](https://mdblist.com) — on a schedule or on demand. Connect your accounts, pick what to
+sync and in which direction, and Watchbridge keeps them in step.
 
 Built to be correct first: it matches titles by ID (never by name), never re-adds a play it has
 already synced, and never marks something watched unless the source actually says so.
@@ -49,15 +49,15 @@ By default the server uses embedded PGlite under `./data` — no external databa
 All configuration is via environment variables — see [`.env.sample`](.env.sample) for the full
 list. Notable ones:
 
-| Variable | Purpose |
-| --- | --- |
-| `APP_ENCRYPTION_KEY` | 32-byte key that encrypts stored provider tokens (AES-256-GCM) |
-| `SESSION_SECRET` | Session/cookie secret |
-| `DATABASE_URL` | `pglite://…` (embedded) or `postgres://…` |
-| `TRUSTED_PROXIES` | `cloudflare`, `loopback`, `private`, or explicit CIDRs — controls real-IP detection |
-| `REGISTRATION_ENABLED` | Toggle public sign-ups |
-| `SMTP_*` / `MAIL_FROM` | Outgoing mail for email verification |
-| `TRAKT_*` / `SIMKL_*` | Operator-registered OAuth app credentials |
+| Variable               | Purpose                                                                             |
+| ---------------------- | ----------------------------------------------------------------------------------- |
+| `APP_ENCRYPTION_KEY`   | 32-byte key that encrypts stored provider tokens (AES-256-GCM)                      |
+| `SESSION_SECRET`       | Session/cookie secret                                                               |
+| `DATABASE_URL`         | `pglite://…` (embedded) or `postgres://…`                                           |
+| `TRUSTED_PROXIES`      | `cloudflare`, `loopback`, `private`, or explicit CIDRs — controls real-IP detection |
+| `REGISTRATION_ENABLED` | Toggle public sign-ups                                                              |
+| `SMTP_*` / `MAIL_FROM` | Outgoing mail for email verification                                                |
+| `TRAKT_*` / `SIMKL_*`  | Operator-registered OAuth app credentials                                           |
 
 Behind Cloudflare, set `TRUSTED_PROXIES=cloudflare` so per-IP rate limits use the real visitor IP
 from `CF-Connecting-IP`, not the Cloudflare edge.
