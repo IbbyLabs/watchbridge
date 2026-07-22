@@ -1,5 +1,6 @@
-import { createLogger, loadConfig, ConfigStartupError } from '@watchbridge/core';
+import { createLogger, loadConfig, ConfigStartupError, SecretBox } from '@watchbridge/core';
 import { createDb } from './db/client.js';
+import { assertStoredSecretsDecryptable } from './db/encryptionKey.js';
 import { createMailer } from './mail/mailer.js';
 import { buildApp } from './app.js';
 
@@ -11,6 +12,11 @@ async function main(): Promise<void> {
   const db = await createDb(config.DATABASE_URL);
   await db.migrate();
   log.info('Database migrated');
+
+  // Every stored provider credential is sealed with APP_ENCRYPTION_KEY. Prove the
+  // key still opens them before serving, so a wrong key fails loudly here rather
+  // than as an unexplained failure on every sync.
+  await assertStoredSecretsDecryptable(db, SecretBox.fromEnv(config.APP_ENCRYPTION_KEY));
 
   const mailer = createMailer(config);
   await mailer.verify();

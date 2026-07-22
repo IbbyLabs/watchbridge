@@ -77,6 +77,7 @@ export class SyncRunner {
 
   async execute(sync: Sync, trigger: Trigger): Promise<RunOutcome> {
     const preview = trigger === 'preview';
+    const startedAt = new Date();
     const dataTypes = parseDataTypes(sync.dataTypes);
 
     const [source, target] = await Promise.all([
@@ -86,7 +87,7 @@ export class SyncRunner {
 
     if (!source || !target) {
       const error = `Missing connection: ${!source ? sync.source : sync.target} is not connected`;
-      return this.finish(sync, trigger, { status: 'error', reports: [], error });
+      return this.finish(sync, trigger, { status: 'error', reports: [], error }, startedAt);
     }
 
     const cursors = parseCursors(sync.cursors);
@@ -121,17 +122,18 @@ export class SyncRunner {
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       log.error({ syncId: sync.id, err }, 'Sync run failed');
-      return this.finish(sync, trigger, { status: 'error', reports, error });
+      return this.finish(sync, trigger, { status: 'error', reports, error }, startedAt);
     }
 
     const failed = reports.some((r) => r.results.some((x) => x.failed > 0));
-    return this.finish(sync, trigger, { status: failed ? 'partial' : 'success', reports }, cursors);
+    return this.finish(sync, trigger, { status: failed ? 'partial' : 'success', reports }, startedAt, cursors);
   }
 
   private async finish(
     sync: Sync,
     trigger: Trigger,
     outcome: RunOutcome,
+    startedAt: Date,
     cursors?: Record<string, string>,
   ): Promise<RunOutcome> {
     if (trigger === 'preview') return outcome;
@@ -150,6 +152,7 @@ export class SyncRunner {
       status: outcome.status,
       report: JSON.stringify(outcome.reports),
       error: outcome.error ?? null,
+      startedAt,
       finishedAt: now,
     });
     await this.db.orm
@@ -157,7 +160,45 @@ export class SyncRunner {
       .set({ lastRunAt: now, updatedAt: now, ...(cursors ? { cursors: JSON.stringify(cursors) } : {}) })
       .where(eq(syncs.id, sync.id));
 
+    this.logRun(sync, trigger, outcome, now.getTime() - startedAt.getTime());
+
     const [run] = await this.db.orm.select().from(syncRuns).where(eq(syncRuns.id, id)).limit(1);
     return { ...outcome, run };
+  }
+
+  /**
+   * One structured line per run. Without it a working instance is silent, so
+   * there is no way to tell from the outside whether syncs are running at all.
+   */
+  private logRun(sync: Sync, trigger: Trigger, outcome: RunOutcome, durationMs: number): void {
+    const fields = {
+      syncId: sync.id,
+      name: sync.name,
+      source: sync.source,
+      target: sync.target,
+      direction: sync.direction,
+      trigger,
+      status: outcome.status,
+      durationMs,
+      directions: outcome.reports.map((r) => ({
+        source: r.source,
+        target: r.target,
+        results: r.results.map((x) => ({
+          dataType: x.dataType,
+          planned: x.planned,
+          added: x.added,
+          skippedPresent: x.skippedPresent,
+          notFound: x.notFound,
+          failed: x.failed,
+          ...(x.note ? { note: x.note } : {}),
+        })),
+      })),
+      ...(outcome.error ? { error: outcome.error } : {}),
+    };
+
+    const message = 'Sync run finished';
+    if (outcome.status === 'error') log.error(fields, message);
+    else if (outcome.status === 'partial') log.warn(fields, message);
+    else log.info(fields, message);
   }
 }

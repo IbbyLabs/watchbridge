@@ -575,16 +575,21 @@ Overall the audit is thorough on sync correctness, provider quirks, and observab
 
 ### Found by direct verification, not by the research
 
-- **Successful sync runs are never logged.** `packages/server/src/sync/runner.ts` contains exactly
-  one logging call, `log.error(..., 'Sync run failed')` at line 123. `scheduler.ts` logs only
-  "Scheduler started" and two error paths. A healthy instance therefore emits nothing after startup,
-  which means there is no way to tell from the outside whether syncs are running at all, how long
-  they took, or what they moved. Verified on the live container: it has produced four log lines in
-  two days of uptime, all from boot, while reporting healthy. The audit caught the downstream
-  symptoms (stalled syncs going unnoticed, no failure notification, a healthcheck that only pings the
-  database) but not this root cause. One structured info line per run with counts and duration makes
-  every one of those symptoms diagnosable, and it is a prerequisite for the stalled-sync detection
-  and healthcheck items above. Impact 4, feasibility 5, effort S.
+- **Runs that fail before reaching the engine are completely silent.** The sync engine does log a
+  line per data type (`packages/core/src/sync/engine.ts:131`, at info), so a run that gets that far
+  is visible. But `runner.ts` returns early when either provider is not connected, and that path
+  writes a `sync_runs` row, updates `lastRunAt`, and logs nothing at all. `runner.ts` had exactly one
+  logging call, `log.error(..., 'Sync run failed')`, covering only thrown exceptions. So the single
+  most likely real-world failure, a broken or expired connection, produced no output whatsoever, and
+  there was no run-level line tying a run's directions and data types together or recording its
+  duration. Fixed: one structured line per completed run at info, warn on partial, error on failed,
+  including the provider pair, trigger, duration and per-data-type counts. Impact 4, feasibility 5,
+  effort S.
+- **The live instance has logged no sync activity since it restarted.** With `LOG_LEVEL` unset in
+  production (so info is enabled) and the engine logging at info on every run, the container has
+  produced four lines in two days of uptime, all from boot, while reporting healthy. Given the engine
+  would log if it were reached, this points at runs ending in the silent early-return path above
+  rather than at an idle scheduler. Worth confirming now that runs log their own outcome.
 
 ### Claims to re-verify
 
