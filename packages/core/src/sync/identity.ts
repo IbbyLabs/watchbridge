@@ -20,11 +20,23 @@ const ID_PRIORITY: Array<keyof ExternalIds> = [
 ];
 
 function episodeSuffix(ref: MediaRef): string {
-  return ref.kind === 'episode' ? `:s${ref.season ?? '?'}:e${ref.number ?? '?'}` : '';
+  return ref.kind === 'episode' ? `:s${ref.season}:e${ref.number}` : '';
+}
+
+/**
+ * An episode is only identifiable with both a season and an episode number.
+ * Season 0 and episode 0 are real values, so this tests for absence, not falsity.
+ */
+function episodeIsPlaceable(ref: MediaRef): boolean {
+  return ref.kind !== 'episode' || (ref.season !== undefined && ref.number !== undefined);
 }
 
 /** Every candidate id-string for a ref (kind-prefixed; episodes carry S/E). */
 export function idStrings(ref: MediaRef): string[] {
+  // Without a season and number, every episode of a show would share one key and
+  // be mistaken for every other. Park it as unidentifiable instead of guessing.
+  if (!episodeIsPlaceable(ref)) return [];
+
   const suffix = episodeSuffix(ref);
   const out: string[] = [];
   for (const key of ID_PRIORITY) {
