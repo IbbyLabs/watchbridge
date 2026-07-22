@@ -246,3 +246,62 @@ describe('SimklClient redirect flow', () => {
     await expect(new SimklClient(cfg).exchangeCode('code', 'https://app/cb')).resolves.toBe('newtok');
   });
 });
+
+describe('Simkl reports what it actually accepted', () => {
+  const creds = { kind: 'simkl' as const, accessToken: 'at' };
+  const movie = (tmdb: number): WatchEvent => ({ ref: { kind: 'movie', ids: { tmdb } }, watchedAt: null });
+  const episode = (tmdb: number, season: number, number: number): WatchEvent => ({
+    ref: { kind: 'episode', ids: { tmdb }, season, number },
+    watchedAt: null,
+  });
+
+  it('counts a movie Simkl could not find as not-found, not added', async () => {
+    routeFetch(() => ({ body: { added: { movies: 1 }, not_found: { movies: [{ ids: { tmdb: 999 } }] } } }));
+
+    const res = await new SimklClient(cfg, creds).pushHistory([movie(550), movie(999)]);
+
+    expect(res.notFound).toBe(1);
+    expect(res.added).toBe(1);
+  });
+
+  it('returns the refs it could not deliver so they are not remembered as delivered', async () => {
+    routeFetch(() => ({ body: { not_found: { movies: [{ ids: { tmdb: 999 } }] } } }));
+
+    const res = await new SimklClient(cfg, creds).pushHistory([movie(550), movie(999)]);
+
+    expect(res.notFoundRefs).toEqual([expect.objectContaining({ ids: { tmdb: 999 } })]);
+  });
+
+  it('handles an episode Simkl could not find', async () => {
+    routeFetch(() => ({
+      body: { not_found: { shows: [{ ids: { tmdb: 1399 }, seasons: [{ number: 1, episodes: [{ number: 2 }] }] }] } },
+    }));
+
+    const res = await new SimklClient(cfg, creds).pushHistory([episode(1399, 1, 1), episode(1399, 1, 2)]);
+
+    expect(res.notFound).toBe(1);
+    expect(res.added).toBe(1);
+    expect(res.notFoundRefs).toEqual([expect.objectContaining({ season: 1, number: 2 })]);
+  });
+
+  it('treats an empty not_found as everything accepted', async () => {
+    routeFetch(() => ({ body: { added: { movies: 2 }, not_found: { movies: [] } } }));
+
+    const res = await new SimklClient(cfg, creds).pushHistory([movie(550), movie(680)]);
+
+    expect(res.notFound).toBe(0);
+    expect(res.added).toBe(2);
+    expect(res.notFoundRefs ?? []).toHaveLength(0);
+  });
+
+  it('does not invent not-found entries when the response omits the field', async () => {
+    // Simkl claims to accept items it will not echo back on a later read; that is
+    // what delivery memory exists for, so absence of not_found means accepted.
+    routeFetch(() => ({ body: {} }));
+
+    const res = await new SimklClient(cfg, creds).pushHistory([movie(550)]);
+
+    expect(res.notFound).toBe(0);
+    expect(res.added).toBe(1);
+  });
+});

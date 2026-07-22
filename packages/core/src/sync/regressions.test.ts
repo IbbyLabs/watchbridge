@@ -146,3 +146,44 @@ describe('regression: repeated runs do not inflate the target', () => {
     expect(target.history).toHaveLength(2);
   });
 });
+
+describe('regression: items the target rejected are not remembered as delivered', () => {
+  // Delivery memory treats a recorded item as present forever. Recording one the
+  // target said it could not find would strand it: never retried, never there.
+  it('excludes rejected refs from the delivered set', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = [movie(550), movie(999)];
+    const target = new FakeProvider('simkl');
+    target.pushHistory = async (events: WatchEvent[]): Promise<PushResult> => {
+      const rejected = events.filter((e) => e.ref.ids.tmdb === 999).map((e) => e.ref);
+      return { ...emptyPushResult(), added: events.length - rejected.length, notFound: rejected.length, notFoundRefs: rejected };
+    };
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+
+    const delivered = report.deliveredHistory ?? [];
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].ids.tmdb).toBe(550);
+  });
+});
+
+describe('regression: rejection matching does not rely on object identity', () => {
+  it('excludes a rejected item even when the target rebuilds the ref object', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = [movie(550), movie(999)];
+    const target = new FakeProvider('simkl');
+    target.pushHistory = async (): Promise<PushResult> => ({
+      ...emptyPushResult(),
+      added: 1,
+      notFound: 1,
+      // A fresh object with the same identity, as a real client would produce.
+      notFoundRefs: [{ kind: 'movie', ids: { tmdb: 999 } }],
+    });
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+
+    const delivered = report.deliveredHistory ?? [];
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].ids.tmdb).toBe(550);
+  });
+});

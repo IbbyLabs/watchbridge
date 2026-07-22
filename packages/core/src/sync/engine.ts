@@ -9,6 +9,7 @@ import type {
 } from '../providers/types.js';
 import { createLogger } from '../logger.js';
 import { planHistorySync, planProgressSync } from './plan.js';
+import { itemKey } from './identity.js';
 
 const log = createLogger('sync');
 
@@ -126,7 +127,19 @@ async function runHistory(
     // A push that didn't throw reached the target. Remember these so the next
     // run treats them as present — targets that accept a write but don't echo it
     // back (provider id/structure mismatch) would otherwise re-send every run.
-    if (res.failed === 0) deliveredNow = plan.toAdd.map((e) => e.ref);
+    // Anything the target explicitly rejected is left out: recording it would
+    // mark it present forever even though it never landed.
+    if (res.failed === 0) {
+      // Match on identity key, not object identity: a provider may hand back
+      // reconstructed refs rather than the exact objects it was given.
+      const rejected = new Set((res.notFoundRefs ?? []).map(itemKey).filter((k): k is string => k !== null));
+      deliveredNow = plan.toAdd
+        .map((e) => e.ref)
+        .filter((ref) => {
+          const key = itemKey(ref);
+          return key === null || !rejected.has(key);
+        });
+    }
   }
   log.info({ source: source.id, target: target.id, preview, ...report }, 'history planned');
   return { report, delivered: deliveredNow };

@@ -63,6 +63,12 @@ export interface PushResult {
   skipped: number;
   failed: number;
   notFound: number;
+  /**
+   * Items the target explicitly reported it could not find. The caller must not
+   * record these as delivered, or they would be treated as present forever and
+   * never retried.
+   */
+  notFoundRefs?: MediaRef[];
 }
 
 export const emptyPushResult = (): PushResult => ({ added: 0, skipped: 0, failed: 0, notFound: 0 });

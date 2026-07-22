@@ -379,12 +379,20 @@ export class SimklClient {
     if (movies.length === 0 && shows.length === 0) return result;
 
     try {
-      await this.http.post('/sync/history', { movies, shows });
+      const res = await this.http.post<SimklHistoryResponse>('/sync/history', { movies, shows });
       const episodeAdds = [...showsByKey.values()].reduce(
         (a, s) => a + [...s.seasons.values()].reduce((b, eps) => b + eps.size, 0),
         0,
       );
-      result.added = movies.length + wholeShows.length + episodeAdds;
+      const sent = movies.length + wholeShows.length + episodeAdds;
+
+      // Simkl reports what it could not match. Its `added` count is not reliable
+      // (it claims items it will not echo back on a later read, which is what
+      // delivery memory handles), so subtract the rejections instead of trusting it.
+      const rejected = refsRejectedBy(res?.not_found, events);
+      result.notFoundRefs = rejected;
+      result.notFound += rejected.length;
+      result.added = sent - rejected.length;
     } catch {
       result.failed = events.length;
     }
@@ -397,3 +405,53 @@ const hasId = (ids: ExternalIds): boolean =>
 
 const idKey = (ids: ExternalIds): string =>
   ids.simkl ? `s${ids.simkl}` : ids.imdb ? `i${ids.imdb}` : ids.tmdb ? `m${ids.tmdb}` : ids.tvdb ? `v${ids.tvdb}` : `a${ids.anilist ?? ids.mal}`;
+
+interface SimklNotFound {
+  movies?: Array<{ ids?: ExternalIds }>;
+  shows?: Array<{ ids?: ExternalIds; seasons?: Array<{ number?: number; episodes?: Array<{ number?: number }> }> }>;
+}
+interface SimklHistoryResponse {
+  not_found?: SimklNotFound;
+}
+
+/** True when two id blocks name the same title through any shared id type. */
+function sharesAnyId(a: ExternalIds | undefined, b: ExternalIds | undefined): boolean {
+  if (!a || !b) return false;
+  return (Object.keys(a) as Array<keyof ExternalIds>).some(
+    (k) => a[k] !== undefined && b[k] !== undefined && a[k] === b[k],
+  );
+}
+
+/** Map Simkl's `not_found` block back onto the events that were sent. */
+function refsRejectedBy(notFound: SimklNotFound | undefined, sent: WatchEvent[]): MediaRef[] {
+  if (!notFound) return [];
+  const out: MediaRef[] = [];
+
+  for (const m of notFound.movies ?? []) {
+    const hit = sent.find((e) => e.ref.kind === 'movie' && sharesAnyId(e.ref.ids, m.ids));
+    if (hit) out.push(hit.ref);
+  }
+
+  for (const show of notFound.shows ?? []) {
+    const seasons = show.seasons ?? [];
+    if (seasons.length === 0) {
+      // A whole series Simkl does not know.
+      const hit = sent.find((e) => e.ref.kind === 'show' && sharesAnyId(e.ref.ids, show.ids));
+      if (hit) out.push(hit.ref);
+      continue;
+    }
+    for (const season of seasons) {
+      for (const ep of season.episodes ?? []) {
+        const hit = sent.find(
+          (e) =>
+            e.ref.kind === 'episode' &&
+            e.ref.season === season.number &&
+            e.ref.number === ep.number &&
+            sharesAnyId(e.ref.ids, show.ids),
+        );
+        if (hit) out.push(hit.ref);
+      }
+    }
+  }
+  return out;
+}
