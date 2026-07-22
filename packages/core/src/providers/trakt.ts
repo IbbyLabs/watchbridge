@@ -83,7 +83,9 @@ export class TraktClient {
     this.tokens = cfg.tokens;
     this.http = new HttpClient({
       baseUrl: TRAKT_BASE,
+      // 1000 GET per 5 minutes (~3.3/sec) but only 1 write per second.
       minIntervalMs: 350,
+      writeMinIntervalMs: 1_000,
       headers: {
         'trakt-api-version': '2',
         'trakt-api-key': cfg.clientId,

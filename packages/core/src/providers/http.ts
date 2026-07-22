@@ -7,12 +7,21 @@ export interface HttpOptions {
   headers?: Record<string, string>;
   /** Query params added to every request unless already present (e.g. Simkl app-name). */
   defaultQuery?: Record<string, string>;
-  /** Minimum spacing between requests, ms (e.g. Trakt writes = 1/sec). */
+  /** Minimum spacing between reads, ms. */
   minIntervalMs?: number;
+  /**
+   * Minimum spacing between writes, ms. Providers commonly allow reads far more
+   * often than writes (Trakt: 1000 GET per 5 min but 1 write/sec; Simkl: 10
+   * GET/sec but 1 POST/sec), and exceeding the write limit risks suspension.
+   * Defaults to `minIntervalMs`.
+   */
+  writeMinIntervalMs?: number;
   /** Max retries on 429 / 5xx. */
   maxRetries?: number;
   /** Bounds the backoff wait honoured from Retry-After, ms. */
   maxBackoffMs?: number;
+  /** Floor on any backoff wait, ms. Stops `Retry-After: 0` becoming a hot retry. */
+  minBackoffMs?: number;
   timeoutMs?: number;
 }
 
@@ -28,6 +37,9 @@ export class HttpError extends Error {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const isWrite = (method: string): boolean =>
+  method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
 
 /**
  * A small fetch wrapper that paces requests, retries on 429/5xx honouring
@@ -46,8 +58,11 @@ export class HttpClient {
       minIntervalMs: 0,
       maxRetries: 4,
       maxBackoffMs: 60_000,
+      minBackoffMs: 1_000,
       timeoutMs: 20_000,
       ...options,
+      // Writes default to the read interval when the caller does not set one.
+      writeMinIntervalMs: options.writeMinIntervalMs ?? options.minIntervalMs ?? 0,
     };
   }
 
@@ -66,7 +81,7 @@ export class HttpClient {
   /** Serialize through a promise chain so minInterval pacing is honoured. */
   private request<T>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
     const run = async (): Promise<T> => {
-      await this.pace();
+      await this.pace(method);
       return this.execute<T>(method, path, body, init);
     };
     const result = this.chain.then(run, run);
@@ -78,9 +93,10 @@ export class HttpClient {
     return result;
   }
 
-  private async pace(): Promise<void> {
-    if (this.opts.minIntervalMs <= 0) return;
-    const wait = this.lastAt + this.opts.minIntervalMs - Date.now();
+  private async pace(method: string): Promise<void> {
+    const interval = isWrite(method) ? this.opts.writeMinIntervalMs : this.opts.minIntervalMs;
+    if (interval <= 0) return;
+    const wait = this.lastAt + interval - Date.now();
     if (wait > 0) await sleep(wait);
     this.lastAt = Date.now();
   }
@@ -144,9 +160,15 @@ export class HttpClient {
     const retryAfter = res.headers.get('retry-after');
     if (retryAfter) {
       const secs = Number(retryAfter);
-      if (Number.isFinite(secs)) return Math.min(secs * 1000, this.opts.maxBackoffMs);
+      // A zero, negative or absurd Retry-After must not turn into a hot retry.
+      if (Number.isFinite(secs)) return this.boundWait(secs * 1000);
     }
     const base = Math.min(2 ** attempt * 1000, this.opts.maxBackoffMs);
-    return base + Math.floor(Math.random() * 250); // jitter
+    return this.boundWait(base + Math.floor(Math.random() * 250)); // jitter
+  }
+
+  /** Clamp to the floor first so an explicit maxBackoffMs still wins. */
+  private boundWait(ms: number): number {
+    return Math.min(Math.max(ms, this.opts.minBackoffMs), this.opts.maxBackoffMs);
   }
 }

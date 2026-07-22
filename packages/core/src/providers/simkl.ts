@@ -85,7 +85,10 @@ export class SimklClient {
   constructor(private readonly cfg: SimklConfig) {
     this.http = new HttpClient({
       baseUrl: SIMKL_BASE,
+      // 10 GET/sec but 1 POST/sec per client_id and per user token; sustained
+      // overage gets the client_id suspended without warning.
       minIntervalMs: 300,
+      writeMinIntervalMs: 1_000,
       headers: {
         'simkl-api-key': cfg.clientId,
         'user-agent': `${cfg.appName ?? 'Watchbridge'}/${cfg.appVersion ?? '0.1.0'}`,
