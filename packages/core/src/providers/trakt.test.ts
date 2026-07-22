@@ -192,3 +192,59 @@ describe('Trakt token refresh', () => {
     expect(refreshed[0]).toMatchObject({ accessToken: 'new', refreshToken: 'newr' });
   });
 });
+
+describe('paging is bounded and complete', () => {
+  const authed = () => new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
+
+  it('follows every page of playback rather than stopping at the first', async () => {
+    const page = (n: number, count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        type: 'movie',
+        progress: 10,
+        paused_at: '2026-01-01T00:00:00Z',
+        movie: { title: `M${n}-${i}`, ids: { tmdb: n * 1000 + i }, runtime: 100 },
+      }));
+    const calls = routeFetch(({ url }) => {
+      if (url.includes('page=1')) return { body: page(1, 100) };
+      if (url.includes('page=2')) return { body: page(2, 7) };
+      return { body: [] };
+    });
+
+    const out = await authed().pullProgress();
+
+    expect(out).toHaveLength(107);
+    expect(calls.filter((c) => c.url.includes('/sync/playback'))).toHaveLength(2);
+    // extended=full must survive the added paging params, or runtime is lost.
+    expect(calls[0].url).toContain('extended=full');
+    expect(calls[0].url).toContain('page=1');
+  });
+
+  it('stops instead of looping when an endpoint ignores the page parameter', async () => {
+    // Returning the same rows for every page would otherwise spin forever.
+    const rows = Array.from({ length: 100 }, (_, i) => ({
+      type: 'movie',
+      progress: 10,
+      movie: { title: `M${i}`, ids: { tmdb: i }, runtime: 100 },
+    }));
+    const calls = routeFetch(() => ({ body: rows }));
+
+    const out = await authed().pullProgress();
+
+    expect(calls.length).toBeLessThan(5);
+    expect(out).toHaveLength(100); // the one page it actually got, not duplicates
+  });
+
+  it('stops when an endpoint ignores paging and returns more than the page size', async () => {
+    const rows = Array.from({ length: 250 }, (_, i) => ({
+      type: 'movie',
+      progress: 10,
+      movie: { title: `M${i}`, ids: { tmdb: i }, runtime: 100 },
+    }));
+    const calls = routeFetch(() => ({ body: rows }));
+
+    const out = await authed().pullProgress();
+
+    expect(calls).toHaveLength(1);
+    expect(out).toHaveLength(250);
+  });
+});

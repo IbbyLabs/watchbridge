@@ -10,6 +10,9 @@ import {
   type WatchEvent,
 } from './types.js';
 
+/** Backstop on paging, so a misbehaving endpoint cannot spin indefinitely. */
+const MAX_PAGES = 200;
+
 const TRAKT_BASE = 'https://api.trakt.tv';
 const OOB_REDIRECT = 'urn:ietf:wg:oauth:2.0:oob';
 
@@ -262,9 +265,7 @@ export class TraktClient {
   async pullProgress(): Promise<ProgressEvent[]> {
     // extended=full adds `runtime` (minutes) so downstream targets that need a
     // resume position in milliseconds (PMDB) can reconstruct it.
-    const items = await this.authed<TraktPlaybackItem[]>((auth) =>
-      this.http.get('/sync/playback?limit=100&extended=full', { headers: auth }),
-    );
+    const items = await this.pageAll<TraktPlaybackItem>('/sync/playback?extended=full');
     const out: ProgressEvent[] = [];
     for (const it of items) {
       if (it.type === 'movie' && it.movie) {
@@ -384,14 +385,31 @@ export class TraktClient {
 
   private async pageAll<T>(path: string, limit = 100): Promise<T[]> {
     const out: T[] = [];
+    const sep = path.includes('?') ? '&' : '?';
     let page = 1;
+    let previousFirstRow: string | undefined;
+
     for (;;) {
       const rows = await this.authed<T[]>((auth) =>
-        this.http.get(`${path}?page=${page}&limit=${limit}`, { headers: auth }),
+        this.http.get(`${path}${sep}page=${page}&limit=${limit}`, { headers: auth }),
       );
+
+      // Not every Trakt collection is paginated. One that isn't returns the whole
+      // set whatever the limit says, so take it once instead of asking forever.
+      if (rows.length > limit) {
+        out.push(...rows);
+        break;
+      }
+
+      // Likewise, an endpoint that ignores `page` hands back the same rows every
+      // time; without this the loop would never end and would duplicate them.
+      const firstRow = rows.length > 0 ? JSON.stringify(rows[0]) : undefined;
+      if (firstRow !== undefined && firstRow === previousFirstRow) break;
+      previousFirstRow = firstRow;
+
       out.push(...rows);
       if (rows.length < limit) break;
-      page++;
+      if (++page > MAX_PAGES) break;
     }
     return out;
   }
