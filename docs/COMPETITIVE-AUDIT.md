@@ -573,6 +573,19 @@ Overall the audit is thorough on sync correctness, provider quirks, and observab
 - **Accessibility — confirmed zero coverage, and it's checkable.** WCAG 2.2 (the current W3C recommendation, published Oct 2023) is the real bar: keyboard operability, visible focus, contrast, and form-error identification are Level A/AA criteria that apply directly to the React/Tailwind SPA (`packages/web/src/pages/*`, `components/ui.tsx`). No item in `ux-ui` or elsewhere addresses any of this. Impact 4, feasibility 4, effort M for a first pass (labeled inputs, focus rings, contrast on the dark theme, keyboard-reachable modals/tables).
 - **Internationalisation — confirmed zero coverage.** For comparison, Homarr (a comparable self-hosted dashboard, github.com/homarr-labs/homarr) ships with 26 languages and takes community translation contributions; that's the norm for this class of self-hosted tool, not an edge case. Watchbridge's web package has no i18n scaffolding at all per the repomap. Impact 2, feasibility 3, effort L (needs a string-extraction pass across all `pages/`/`components/` first).
 
+### Found by direct verification, not by the research
+
+- **Successful sync runs are never logged.** `packages/server/src/sync/runner.ts` contains exactly
+  one logging call, `log.error(..., 'Sync run failed')` at line 123. `scheduler.ts` logs only
+  "Scheduler started" and two error paths. A healthy instance therefore emits nothing after startup,
+  which means there is no way to tell from the outside whether syncs are running at all, how long
+  they took, or what they moved. Verified on the live container: it has produced four log lines in
+  two days of uptime, all from boot, while reporting healthy. The audit caught the downstream
+  symptoms (stalled syncs going unnoticed, no failure notification, a healthcheck that only pings the
+  database) but not this root cause. One structured info line per run with counts and duration makes
+  every one of those symptoms diagnosable, and it is a prerequisite for the stalled-sync detection
+  and healthcheck items above. Impact 4, feasibility 5, effort S.
+
 ### Claims to re-verify
 
 - `[data-types] Rewatch / multiple-plays history not modelled — now supported end-to-end (Trakt native, Simkl sessions since 2026-05-22)` — the rewatch/session feature itself is real (Simkl's `POST /sync/history?allow_rewatch=yes`, up to 50 sessions, Pro/VIP-gated), but 2026-05-22 looks like it's been conflated with the date Simkl's *API docs* were frozen ahead of migrating off Apiary (Apiary is being sunset by Oracle in Oct 2026), not the date the rewatch feature itself shipped. Re-check the actual feature-launch date before citing it.
