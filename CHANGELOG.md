@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/IbbyLabs/watchbridge/compare/v0.6.1...v0.7.0) (2026-07-22)
+
+
+### Features
+
+* **server:** log sync run outcomes and verify the encryption key at startup ([ea3eccd](https://github.com/IbbyLabs/watchbridge/commit/ea3eccdb0cb837a7ccf2def2f927f33e1f4cd205))
+
 ## [0.6.1](https://github.com/IbbyLabs/watchbridge/compare/v0.6.0...v0.6.1) (2026-07-12)
 
 
