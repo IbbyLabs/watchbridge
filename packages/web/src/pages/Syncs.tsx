@@ -33,6 +33,7 @@ const PROVIDERS: ProviderId[] = ['trakt', 'simkl', 'pmdb', 'mdblist'];
 const DATA_TYPES: { id: DataType; label: string }[] = [
   { id: 'history', label: 'Watch history' },
   { id: 'progress', label: 'Playback progress' },
+  { id: 'ratings', label: 'Ratings' },
 ];
 
 export function Syncs() {
@@ -164,6 +165,9 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
         {describeFilters(sync.filters) && (
           <Pill tone="neutral">{describeFilters(sync.filters)}</Pill>
         )}
+        {sync.dataTypes.includes('ratings') && sync.ratingsAuthority && (
+          <Pill tone="neutral">ratings from {PROVIDER_LABEL[sync.ratingsAuthority]}</Pill>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <Button variant="ghost" onClick={toggle}>
             {sync.enabled ? 'Enabled' : 'Paused'}
@@ -265,9 +269,11 @@ function CreateSyncModal({
   const [syncMovies, setSyncMovies] = useState(true);
   const [syncShows, setSyncShows] = useState(true);
   const [syncSpecials, setSyncSpecials] = useState(true);
+  const [ratingsAuthority, setRatingsAuthority] = useState<ProviderId | ''>('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const connectedIds = new Set(connections.map((c) => c.provider));
+  const ratingsOn = types.includes('ratings');
 
   const toggleType = (t: DataType) =>
     setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -286,6 +292,8 @@ function CreateSyncModal({
     if (source === target) return setError('Source and target must be different');
     if (types.length === 0) return setError('Pick at least one data type');
     if (!syncMovies && !syncShows) return setError('Turning off both movies and shows syncs nothing');
+    if (ratingsOn && ratingsAuthority !== source && ratingsAuthority !== target)
+      return setError('Pick which side is the ratings authority');
     setLoading(true);
     setError(null);
     try {
@@ -294,6 +302,7 @@ function CreateSyncModal({
         source,
         target,
         dataTypes: types,
+        ratingsAuthority: ratingsOn ? ratingsAuthority : null,
         direction,
         intervalMinutes: interval ? Number(interval) : null,
         filters: buildFilters(),
@@ -341,6 +350,7 @@ function CreateSyncModal({
               <button
                 key={d.id}
                 type="button"
+                aria-pressed={types.includes(d.id)}
                 onClick={() => toggleType(d.id)}
                 className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
                   types.includes(d.id)
@@ -353,6 +363,23 @@ function CreateSyncModal({
             ))}
           </div>
         </Field>
+        {ratingsOn && (
+          <Field
+            label="Ratings authority"
+            hint="Ratings can't be dated, so one side must win a disagreement. Its score is copied to the other."
+          >
+            <Select
+              value={ratingsAuthority === source || ratingsAuthority === target ? ratingsAuthority : ''}
+              onChange={(e) => setRatingsAuthority(e.target.value as ProviderId | '')}
+            >
+              <option value="" disabled>
+                Choose a side…
+              </option>
+              <option value={source}>{PROVIDER_LABEL[source]} (source)</option>
+              <option value={target}>{PROVIDER_LABEL[target]} (target)</option>
+            </Select>
+          </Field>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <Field label="Direction">
             <Select

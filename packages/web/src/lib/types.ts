@@ -1,5 +1,5 @@
 export type ProviderId = 'trakt' | 'simkl' | 'pmdb' | 'mdblist';
-export type DataType = 'history' | 'progress';
+export type DataType = 'history' | 'progress' | 'ratings';
 
 export interface User {
   id: string;
@@ -53,6 +53,7 @@ export interface Sync {
   direction: 'one_way' | 'two_way';
   intervalMinutes: number | null;
   filters: SyncFilters | null;
+  ratingsAuthority: ProviderId | null;
   enabled: boolean;
   lastRunAt: string | null;
   createdAt: string;
