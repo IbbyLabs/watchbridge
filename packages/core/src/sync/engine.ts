@@ -10,6 +10,7 @@ import type {
 import { createLogger } from '../logger.js';
 import { planHistorySync, planProgressSync } from './plan.js';
 import { itemKey } from './identity.js';
+import { includedByFilters, type SyncFilters } from './filters.js';
 
 const log = createLogger('sync');
 
@@ -66,6 +67,8 @@ export interface RunSyncOptions {
   since?: string | null;
   /** Items already delivered to the target on prior runs; treated as present. */
   deliveredHistory?: MediaRef[];
+  /** Per-sync scope controls; unset means sync everything. */
+  filters?: SyncFilters;
   /** Injected clock for deterministic timestamps in tests. */
   now?: () => Date;
 }
@@ -87,11 +90,11 @@ export async function runSync(
 
   for (const dataType of options.dataTypes) {
     if (dataType === 'history') {
-      const { report, delivered } = await runHistory(source, target, options.preview, options.since, options.deliveredHistory);
+      const { report, delivered } = await runHistory(source, target, options.preview, options.since, options.deliveredHistory, options.filters);
       results.push(report);
       if (delivered.length > 0) deliveredHistory = delivered;
     } else if (dataType === 'progress') {
-      results.push(await runProgress(source, target, options.preview));
+      results.push(await runProgress(source, target, options.preview, options.filters));
     } else {
       results.push(emptyReport(dataType, `${dataType} sync is not implemented yet`));
     }
@@ -106,9 +109,11 @@ async function runHistory(
   preview: boolean,
   since?: string | null,
   delivered: MediaRef[] = [],
+  filters?: SyncFilters,
 ): Promise<{ report: DataTypeReport; delivered: MediaRef[] }> {
   // Source pull may use the delta cursor; the target pull always reflects current state.
-  const [src, tgt] = await Promise.all([source.pullHistory(since), target.pullHistory()]);
+  const [srcAll, tgt] = await Promise.all([source.pullHistory(since), target.pullHistory()]);
+  const src = srcAll.filter((e) => includedByFilters(e.ref, filters));
   const plan = planHistorySync(src, tgt, delivered);
   const report: DataTypeReport = {
     dataType: 'history',
@@ -145,11 +150,12 @@ async function runHistory(
   return { report, delivered: deliveredNow };
 }
 
-async function runProgress(source: SyncSource, target: SyncTarget, preview: boolean): Promise<DataTypeReport> {
+async function runProgress(source: SyncSource, target: SyncTarget, preview: boolean, filters?: SyncFilters): Promise<DataTypeReport> {
   if (!source.capabilities().progress) {
     return emptyReport('progress', `${source.id} does not expose playback progress`);
   }
-  const [src, tgt] = await Promise.all([source.pullProgress(), target.pullProgress()]);
+  const [srcAll, tgt] = await Promise.all([source.pullProgress(), target.pullProgress()]);
+  const src = srcAll.filter((e) => includedByFilters(e.ref, filters));
   const plan = planProgressSync(src, tgt);
   const report: DataTypeReport = {
     dataType: 'progress',

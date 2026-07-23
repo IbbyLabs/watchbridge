@@ -1,4 +1,5 @@
 import { HttpClient, HttpError } from './http.js';
+import { sharesAnyId } from '../sync/identity.js';
 import {
   emptyPushResult,
   positionFromRuntime,
@@ -412,14 +413,6 @@ interface SimklNotFound {
 }
 interface SimklHistoryResponse {
   not_found?: SimklNotFound;
-}
-
-/** True when two id blocks name the same title through any shared id type. */
-function sharesAnyId(a: ExternalIds | undefined, b: ExternalIds | undefined): boolean {
-  if (!a || !b) return false;
-  return (Object.keys(a) as Array<keyof ExternalIds>).some(
-    (k) => a[k] !== undefined && b[k] !== undefined && a[k] === b[k],
-  );
 }
 
 /** Map Simkl's `not_found` block back onto the events that were sent. */

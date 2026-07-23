@@ -12,6 +12,29 @@ import type { SyncScheduler } from '../sync/scheduler.js';
 const provider = z.enum(['trakt', 'simkl', 'pmdb', 'mdblist']);
 const dataType = z.enum(['history', 'progress']);
 
+const externalIds = z
+  .object({
+    imdb: z.string().optional(),
+    tmdb: z.number().int().optional(),
+    tvdb: z.number().int().optional(),
+    trakt: z.number().int().optional(),
+    slug: z.string().optional(),
+    simkl: z.number().int().optional(),
+    mal: z.number().int().optional(),
+    anilist: z.number().int().optional(),
+    anidb: z.number().int().optional(),
+  })
+  .strict();
+
+const filters = z
+  .object({
+    movies: z.boolean().optional(),
+    shows: z.boolean().optional(),
+    excludeSpecials: z.boolean().optional(),
+    exclude: z.array(externalIds).max(500).optional(),
+  })
+  .strict();
+
 const createBody = z
   .object({
     name: z.string().trim().min(1).max(80),
@@ -20,6 +43,7 @@ const createBody = z
     dataTypes: z.array(dataType).min(1),
     direction: z.enum(['one_way', 'two_way']).default('one_way'),
     intervalMinutes: z.number().int().positive().nullable().optional(),
+    filters: filters.nullable().optional(),
   })
   .refine((v) => v.source !== v.target, {
     message: 'source and target must differ',
@@ -31,8 +55,24 @@ const patchBody = z.object({
   dataTypes: z.array(dataType).min(1).optional(),
   direction: z.enum(['one_way', 'two_way']).optional(),
   intervalMinutes: z.number().int().positive().nullable().optional(),
+  filters: filters.nullable().optional(),
   enabled: z.boolean().optional(),
 });
+
+/** Store null for an absent or empty filter object, so "no filtering" is uniform. */
+function serializeFilters(f: z.infer<typeof filters> | null | undefined): string | null {
+  if (!f || Object.keys(f).length === 0) return null;
+  return JSON.stringify(f);
+}
+
+function parseFilters(raw: string | null): z.infer<typeof filters> | null {
+  if (!raw) return null;
+  try {
+    return filters.parse(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
 
 function toPublic(s: Sync) {
   return {
@@ -43,6 +83,7 @@ function toPublic(s: Sync) {
     dataTypes: parseDataTypes(s.dataTypes),
     direction: s.direction,
     intervalMinutes: s.intervalMinutes,
+    filters: parseFilters(s.filters),
     enabled: s.enabled,
     lastRunAt: s.lastRunAt,
     createdAt: s.createdAt,
@@ -93,6 +134,7 @@ export function syncRoutes(
       dataTypes: JSON.stringify(data.dataTypes),
       direction: data.direction,
       intervalMinutes: clampInterval(data.intervalMinutes),
+      filters: serializeFilters(data.filters),
     });
     const [row] = await db.orm.select().from(syncs).where(eq(syncs.id, id)).limit(1);
     return reply.code(201).send(toPublic(row!));
@@ -114,6 +156,7 @@ export function syncRoutes(
         ...(d.intervalMinutes !== undefined
           ? { intervalMinutes: clampInterval(d.intervalMinutes) }
           : {}),
+        ...(d.filters !== undefined ? { filters: serializeFilters(d.filters) } : {}),
         ...(d.enabled !== undefined ? { enabled: d.enabled } : {}),
         updatedAt: new Date(),
       })

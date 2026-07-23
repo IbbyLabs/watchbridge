@@ -125,4 +125,24 @@ describe('sync end-to-end (trakt -> pmdb history)', () => {
     const runs = res.json() as unknown[];
     expect(runs.length).toBe(2); // two manual runs (preview not persisted)
   });
+
+  it('round-trips a filter and applies it to planning', async () => {
+    // The only source item is a movie; a movies:false filter must plan nothing.
+    const patched = await authed({
+      method: 'PATCH',
+      url: `/api/syncs/${syncId}`,
+      payload: { filters: { movies: false } },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().filters).toEqual({ movies: false });
+
+    const preview = await authed({ method: 'POST', url: `/api/syncs/${syncId}/preview` });
+    expect(preview.json().reports[0].results[0]).toMatchObject({ planned: 0 });
+
+    // Clearing the filter restores the item as a candidate (already present now).
+    const cleared = await authed({ method: 'PATCH', url: `/api/syncs/${syncId}`, payload: { filters: null } });
+    expect(cleared.json().filters).toBeNull();
+    const after = await authed({ method: 'POST', url: `/api/syncs/${syncId}/preview` });
+    expect(after.json().reports[0].results[0]).toMatchObject({ planned: 0, skippedPresent: 1 });
+  });
 });

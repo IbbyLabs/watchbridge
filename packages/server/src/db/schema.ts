@@ -121,6 +121,8 @@ export const syncs = pgTable(
     enabled: boolean('enabled').notNull().default(true),
     /** Per-provider delta cursors, JSON e.g. {"simkl:history":"2023-10-12T09:03:45Z"}. */
     cursors: text('cursors').notNull().default('{}'),
+    /** Per-sync scope filters (SyncFilters JSON); null means sync everything. */
+    filters: text('filters'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     lastRunAt: timestamp('last_run_at', { withTimezone: true }),

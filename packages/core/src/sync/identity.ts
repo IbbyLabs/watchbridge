@@ -69,6 +69,14 @@ export function hasIdentity(ref: MediaRef): boolean {
   return idStrings(ref).length > 0;
 }
 
+/** True when two id blocks name the same title through any shared id type. */
+export function sharesAnyId(a: ExternalIds | undefined, b: ExternalIds | undefined): boolean {
+  if (!a || !b) return false;
+  return (Object.keys(a) as Array<keyof ExternalIds>).some(
+    (k) => a[k] !== undefined && b[k] !== undefined && a[k] === b[k],
+  );
+}
+
 /** One stable primary key for de-duplication (highest-priority id + S/E). */
 export function itemKey(ref: MediaRef): string | null {
   const [first] = idStrings(ref);

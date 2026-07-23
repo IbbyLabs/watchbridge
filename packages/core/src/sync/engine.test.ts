@@ -103,3 +103,50 @@ describe('runSync', () => {
     expect(target.progress).toHaveLength(1);
   });
 });
+
+describe('runSync honours filters', () => {
+  const now = () => new Date('2026-07-23T00:00:00Z');
+
+  it('does not plan an item the filters exclude', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = [
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null },
+      { ref: { kind: 'episode', ids: { tmdb: 78173 }, season: 1, number: 1 }, watchedAt: null },
+    ];
+    const target = new FakeProvider('simkl');
+
+    const report = await runSync(source, target, {
+      dataTypes: ['history'],
+      preview: false,
+      now,
+      filters: { movies: false },
+    });
+
+    const history = report.results.find((r) => r.dataType === 'history')!;
+    // Only the episode survives the movies:false filter.
+    expect(history.added).toBe(1);
+    expect(target.history).toHaveLength(1);
+    expect(target.history[0].ref.kind).toBe('episode');
+  });
+
+  it('applies filters to progress as well', async () => {
+    const source = new FakeProvider('trakt');
+    source.progress = [
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, progress: 40 },
+      { ref: { kind: 'episode', ids: { tmdb: 78173 }, season: 1, number: 1 }, progress: 40 },
+    ];
+    const target = new FakeProvider('simkl');
+
+    const report = await runSync(source, target, {
+      dataTypes: ['progress'],
+      preview: false,
+      now,
+      filters: { shows: false },
+    });
+
+    const progress = report.results.find((r) => r.dataType === 'progress')!;
+    expect(progress.added).toBe(1);
+    expect(target.progress).toHaveLength(1);
+    expect(target.progress[0].ref.kind).toBe('movie');
+  });
+});

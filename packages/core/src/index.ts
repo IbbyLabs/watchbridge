@@ -36,6 +36,7 @@ export {
   type HistoryPlan,
   type ProgressPlan,
 } from './sync/plan.js';
+export { includedByFilters, type SyncFilters } from './sync/filters.js';
 export {
   runSync,
   type SyncSource,

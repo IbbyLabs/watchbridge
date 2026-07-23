@@ -7,6 +7,7 @@ import {
   type ProviderId,
   type RunOutcome,
   type Sync,
+  type SyncFilters,
   type SyncRun,
 } from '../lib/types.ts';
 import {
@@ -160,6 +161,9 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
             )}
           </Pill>
         )}
+        {describeFilters(sync.filters) && (
+          <Pill tone="neutral">{describeFilters(sync.filters)}</Pill>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <Button variant="ghost" onClick={toggle}>
             {sync.enabled ? 'Enabled' : 'Paused'}
@@ -258,6 +262,9 @@ function CreateSyncModal({
   const [types, setTypes] = useState<DataType[]>(['history']);
   const [direction, setDirection] = useState<'one_way' | 'two_way'>('one_way');
   const [interval, setInterval] = useState('');
+  const [syncMovies, setSyncMovies] = useState(true);
+  const [syncShows, setSyncShows] = useState(true);
+  const [syncSpecials, setSyncSpecials] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const connectedIds = new Set(connections.map((c) => c.provider));
@@ -265,10 +272,20 @@ function CreateSyncModal({
   const toggleType = (t: DataType) =>
     setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
+  /** Only send a filters object when it narrows the default (sync everything). */
+  const buildFilters = () => {
+    const f: SyncFilters = {};
+    if (!syncMovies) f.movies = false;
+    if (!syncShows) f.shows = false;
+    if (!syncSpecials) f.excludeSpecials = true;
+    return Object.keys(f).length > 0 ? f : null;
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (source === target) return setError('Source and target must be different');
     if (types.length === 0) return setError('Pick at least one data type');
+    if (!syncMovies && !syncShows) return setError('Turning off both movies and shows syncs nothing');
     setLoading(true);
     setError(null);
     try {
@@ -279,6 +296,7 @@ function CreateSyncModal({
         dataTypes: types,
         direction,
         intervalMinutes: interval ? Number(interval) : null,
+        filters: buildFilters(),
       });
       onDone();
     } catch {
@@ -355,6 +373,22 @@ function CreateSyncModal({
             />
           </Field>
         </div>
+        <Field label="Include" hint="Everything is included by default. Switch anything off to narrow the sync.">
+          <div className="flex flex-wrap items-center gap-2">
+            <ToggleChip pressed={syncMovies} onClick={() => setSyncMovies((v) => !v)}>
+              Movies
+            </ToggleChip>
+            <ToggleChip pressed={syncShows} onClick={() => setSyncShows((v) => !v)}>
+              Shows
+            </ToggleChip>
+            <ToggleChip pressed={syncSpecials} onClick={() => setSyncSpecials((v) => !v)}>
+              Specials
+            </ToggleChip>
+          </div>
+        </Field>
+        {!syncMovies && !syncShows && (
+          <p className="text-sm text-danger">Turning off both movies and shows syncs nothing.</p>
+        )}
         {error && <p className="text-sm text-danger">{error}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>
@@ -366,6 +400,43 @@ function CreateSyncModal({
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** A short human summary of a sync's scope, or null when it syncs everything. */
+function describeFilters(filters: SyncFilters | null): string | null {
+  if (!filters) return null;
+  const parts: string[] = [];
+  if (filters.movies === false) parts.push('no movies');
+  if (filters.shows === false) parts.push('no shows');
+  if (filters.excludeSpecials) parts.push('no specials');
+  const excluded = filters.exclude?.length ?? 0;
+  if (excluded > 0) parts.push(`${excluded} excluded`);
+  return parts.length > 0 ? parts.join(', ') : null;
+}
+
+function ToggleChip({
+  pressed,
+  onClick,
+  children,
+}: {
+  pressed: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={onClick}
+      className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+        pressed
+          ? 'border-brand bg-brand/15 text-ink'
+          : 'border-border text-muted hover:text-ink'
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 

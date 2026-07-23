@@ -5,6 +5,7 @@ import {
   createLogger,
   type DataType,
   type ProviderId,
+  type SyncFilters,
   type SyncReport,
 } from '@watchbridge/core';
 import type { Db } from '../db/client.js';
@@ -40,6 +41,16 @@ function parseCursors(raw: string | null): Record<string, string> {
     return obj && typeof obj === 'object' ? (obj as Record<string, string>) : {};
   } catch {
     return {};
+  }
+}
+
+function parseFilters(raw: string | null): SyncFilters | undefined {
+  if (!raw) return undefined;
+  try {
+    const obj = JSON.parse(raw) as unknown;
+    return obj && typeof obj === 'object' ? (obj as SyncFilters) : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -91,12 +102,14 @@ export class SyncRunner {
     }
 
     const cursors = parseCursors(sync.cursors);
+    const filters = parseFilters(sync.filters);
     const key = (provider: string) => `${provider}:history`;
     const reports: SyncReport[] = [];
     try {
       const forward = await runSync(source, target, {
         dataTypes,
         preview,
+        filters,
         since: cursors[key(sync.source)] ?? null,
         deliveredHistory: await this.deliveries.load(sync.id, sync.target),
       });
@@ -110,6 +123,7 @@ export class SyncRunner {
         const back = await runSync(target, source, {
           dataTypes,
           preview,
+          filters,
           since: cursors[key(sync.target)] ?? null,
           deliveredHistory: await this.deliveries.load(sync.id, sync.source),
         });

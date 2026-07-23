@@ -25,6 +25,25 @@ export interface ProviderStatus {
   redirect: boolean;
 }
 
+export interface ExternalIds {
+  imdb?: string;
+  tmdb?: number;
+  tvdb?: number;
+  trakt?: number;
+  slug?: string;
+  simkl?: number;
+  mal?: number;
+  anilist?: number;
+  anidb?: number;
+}
+
+export interface SyncFilters {
+  movies?: boolean;
+  shows?: boolean;
+  excludeSpecials?: boolean;
+  exclude?: ExternalIds[];
+}
+
 export interface Sync {
   id: string;
   name: string;
@@ -33,6 +52,7 @@ export interface Sync {
   dataTypes: DataType[];
   direction: 'one_way' | 'two_way';
   intervalMinutes: number | null;
+  filters: SyncFilters | null;
   enabled: boolean;
   lastRunAt: string | null;
   createdAt: string;
