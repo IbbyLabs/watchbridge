@@ -5,10 +5,11 @@ import type {
   ProviderCapabilities,
   ProviderId,
   PushResult,
+  RatingEvent,
   WatchEvent,
 } from '../providers/types.js';
 import { createLogger } from '../logger.js';
-import { planHistorySync, planProgressSync } from './plan.js';
+import { planHistorySync, planProgressSync, planRatingsSync } from './plan.js';
 import { itemKey } from './identity.js';
 import { includedByFilters, type SyncFilters } from './filters.js';
 
@@ -21,6 +22,8 @@ export interface SyncSource {
   /** `since` is an optional delta cursor (Simkl activities timestamp); ignored by providers that don't page by date. */
   pullHistory(since?: string | null): Promise<WatchEvent[]>;
   pullProgress(): Promise<ProgressEvent[]>;
+  /** Present only on providers that expose user ratings (Trakt, Simkl). */
+  pullRatings?(): Promise<RatingEvent[]>;
   /** A newer delta cursor after a pull, if the provider tracks one (Simkl). */
   readonly lastActivityAll?: string;
 }
@@ -29,6 +32,8 @@ export interface SyncSource {
 export interface SyncTarget extends SyncSource {
   pushHistory(events: WatchEvent[]): Promise<PushResult>;
   pushProgress(events: ProgressEvent[]): Promise<PushResult>;
+  /** Present only on providers that accept rating writes (Trakt, Simkl). */
+  pushRatings?(events: RatingEvent[]): Promise<PushResult>;
 }
 
 export interface DataTypeReport {
@@ -69,6 +74,8 @@ export interface RunSyncOptions {
   deliveredHistory?: MediaRef[];
   /** Per-sync scope controls; unset means sync everything. */
   filters?: SyncFilters;
+  /** For ratings: the provider whose rating wins a conflict. */
+  ratingsAuthority?: ProviderId;
   /** Injected clock for deterministic timestamps in tests. */
   now?: () => Date;
 }
@@ -95,6 +102,8 @@ export async function runSync(
       if (delivered.length > 0) deliveredHistory = delivered;
     } else if (dataType === 'progress') {
       results.push(await runProgress(source, target, options.preview, options.filters));
+    } else if (dataType === 'ratings') {
+      results.push(await runRatings(source, target, options.preview, options.ratingsAuthority, options.filters));
     } else {
       results.push(emptyReport(dataType, `${dataType} sync is not implemented yet`));
     }
@@ -169,6 +178,41 @@ async function runProgress(source: SyncSource, target: SyncTarget, preview: bool
   };
   if (!preview && plan.toAdd.length > 0) {
     const res = await target.pushProgress(plan.toAdd);
+    applyPush(report, res);
+  }
+  return report;
+}
+
+async function runRatings(
+  source: SyncSource,
+  target: SyncTarget,
+  preview: boolean,
+  ratingsAuthority: ProviderId | undefined,
+  filters?: SyncFilters,
+): Promise<DataTypeReport> {
+  if (!source.capabilities().ratings || !source.pullRatings) {
+    return emptyReport('ratings', `${source.id} does not expose ratings`);
+  }
+  if (!target.capabilities().ratings || !target.pushRatings || !target.pullRatings) {
+    return emptyReport('ratings', `${target.id} does not accept ratings`);
+  }
+  const [srcAll, tgt] = await Promise.all([source.pullRatings(), target.pullRatings()]);
+  const src = srcAll.filter((e) => includedByFilters(e.ref, filters));
+  // No authority set means the source may only fill gaps, never overwrite.
+  const sourceIsAuthoritative = ratingsAuthority === source.id;
+  const plan = planRatingsSync(src, tgt, { sourceIsAuthoritative });
+  const report: DataTypeReport = {
+    dataType: 'ratings',
+    planned: plan.toApply.length,
+    added: 0,
+    skippedPresent: plan.skippedUnchanged,
+    skippedOther: plan.skippedDuplicate,
+    unmatched: plan.unmatched.length,
+    notFound: 0,
+    failed: 0,
+  };
+  if (!preview && plan.toApply.length > 0) {
+    const res = await target.pushRatings(plan.toApply);
     applyPush(report, res);
   }
   return report;

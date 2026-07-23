@@ -7,6 +7,7 @@ import {
   type ProgressEvent,
   type ProviderCapabilities,
   type PushResult,
+  type RatingEvent,
   type WatchEvent,
 } from './types.js';
 
@@ -56,6 +57,16 @@ interface TraktPlaybackItem {
   movie?: { title?: string; year?: number; runtime?: number; ids: TraktIdBlock };
   episode?: { season: number; number: number; runtime?: number; ids: TraktIdBlock };
   show?: { title?: string; year?: number; ids: TraktIdBlock };
+}
+interface TraktRatingMovie {
+  rated_at: string;
+  rating: number;
+  movie: { title?: string; year?: number; ids: TraktIdBlock };
+}
+interface TraktRatingShow {
+  rated_at: string;
+  rating: number;
+  show: { title?: string; year?: number; ids: TraktIdBlock };
 }
 
 export interface TraktConfig {
@@ -380,6 +391,58 @@ export class TraktClient {
         else result.failed++;
       }
     }
+    return result;
+  }
+
+  async pullRatings(): Promise<RatingEvent[]> {
+    // Movies and shows only. Trakt rates episodes by the episode's own id, which
+    // an episode ref does not carry, so episode ratings are out of scope for now.
+    const movies = await this.pageAll<TraktRatingMovie>('/sync/ratings/movies');
+    const shows = await this.pageAll<TraktRatingShow>('/sync/ratings/shows');
+    const out: RatingEvent[] = [];
+    for (const m of movies) {
+      out.push({
+        ref: { kind: 'movie', ids: toIds(m.movie.ids), title: m.movie.title, year: m.movie.year },
+        rating: m.rating,
+        ratedAt: m.rated_at,
+      });
+    }
+    for (const s of shows) {
+      out.push({
+        ref: { kind: 'show', ids: toIds(s.show.ids), title: s.show.title, year: s.show.year },
+        rating: s.rating,
+        ratedAt: s.rated_at,
+      });
+    }
+    return out;
+  }
+
+  async pushRatings(events: RatingEvent[]): Promise<PushResult> {
+    const result = emptyPushResult();
+    const movies: Array<Record<string, unknown>> = [];
+    const shows: Array<Record<string, unknown>> = [];
+
+    for (const e of events) {
+      if (e.ref.kind !== 'movie' && e.ref.kind !== 'show') {
+        result.notFound++; // episodes/seasons are not supported through this model
+        continue;
+      }
+      if (!hasWritableId(e.ref.ids)) {
+        result.notFound++;
+        continue;
+      }
+      const entry = { rating: e.rating, rated_at: e.ratedAt ?? undefined, ids: writableIds(e.ref.ids) };
+      (e.ref.kind === 'movie' ? movies : shows).push(entry);
+    }
+
+    if (movies.length === 0 && shows.length === 0) return result;
+
+    const res = await this.authed<{ not_found?: { movies?: unknown[]; shows?: unknown[] } }>((auth) =>
+      this.http.post('/sync/ratings', { movies, shows }, { headers: auth }),
+    );
+    const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
+    result.notFound += rejected;
+    result.added = movies.length + shows.length - rejected;
     return result;
   }
 

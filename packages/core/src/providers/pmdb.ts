@@ -64,7 +64,8 @@ export class PmdbClient {
   }
 
   capabilities(): ProviderCapabilities {
-    return { history: true, progress: true, ratings: true, watchlist: true, datedHistory: true };
+    // ratings not implemented for PMDB yet; do not advertise it.
+    return { history: true, progress: true, ratings: false, watchlist: true, datedHistory: true };
   }
 
   /** Validate the API key. Returns true if accepted, false on 401. */

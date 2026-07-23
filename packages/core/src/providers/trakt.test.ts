@@ -248,3 +248,62 @@ describe('paging is bounded and complete', () => {
     expect(out).toHaveLength(250);
   });
 });
+
+describe('Trakt ratings', () => {
+  const authed = () => new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
+
+  it('reads movie and show ratings', async () => {
+    routeFetch(({ url }) => {
+      if (url.includes('/sync/ratings/movies')) return { body: [{ rated_at: '2024-01-01T00:00:00Z', rating: 8, movie: { title: 'Fight Club', ids: { tmdb: 550 } } }] };
+      if (url.includes('/sync/ratings/shows')) return { body: [{ rated_at: '2024-02-01T00:00:00Z', rating: 9, show: { title: 'GoT', ids: { tmdb: 1399 } } }] };
+      return { body: [] };
+    });
+
+    const out = await authed().pullRatings();
+
+    expect(out).toHaveLength(2);
+    expect(out.find((r) => r.ref.kind === 'movie')).toMatchObject({ rating: 8, ratedAt: '2024-01-01T00:00:00Z' });
+    expect(out.find((r) => r.ref.kind === 'show')).toMatchObject({ rating: 9 });
+  });
+
+  it('writes movie and show ratings in one call and counts not_found', async () => {
+    const calls = routeFetch(() => ({ body: { not_found: { movies: [], shows: [] } } }));
+
+    const res = await authed().pushRatings([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, rating: 8 },
+      { ref: { kind: 'show', ids: { tmdb: 1399 } }, rating: 9 },
+    ]);
+
+    expect(res.added).toBe(2);
+    const post = calls.find((c) => c.url.includes('/sync/ratings') && c.method === 'POST')!;
+    expect(post.body).toMatchObject({
+      movies: [{ rating: 8, ids: { tmdb: 550 } }],
+      shows: [{ rating: 9, ids: { tmdb: 1399 } }],
+    });
+  });
+
+  it('reports an episode rating as not-found (unsupported through this model)', async () => {
+    const calls = routeFetch(() => ({ body: {} }));
+
+    const res = await authed().pushRatings([
+      { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 1 }, rating: 10 },
+    ]);
+
+    expect(res.notFound).toBe(1);
+    expect(res.added).toBe(0);
+    // Nothing was posted because there was nothing writable.
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  it('subtracts what Trakt says it could not find', async () => {
+    routeFetch(() => ({ body: { not_found: { movies: [{ ids: { tmdb: 999 } }], shows: [] } } }));
+
+    const res = await authed().pushRatings([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, rating: 8 },
+      { ref: { kind: 'movie', ids: { tmdb: 999 } }, rating: 7 },
+    ]);
+
+    expect(res.notFound).toBe(1);
+    expect(res.added).toBe(1);
+  });
+});

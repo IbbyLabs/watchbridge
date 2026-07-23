@@ -305,3 +305,51 @@ describe('Simkl reports what it actually accepted', () => {
     expect(res.added).toBe(1);
   });
 });
+
+describe('Simkl ratings', () => {
+  const creds = { kind: 'simkl' as const, accessToken: 'at' };
+
+  it('reads movie, show and anime ratings, skipping unrated rows', async () => {
+    routeFetch(() => ({
+      body: {
+        movies: [{ user_rating: 8, user_rated_at: '2024-01-01T00:00:00Z', movie: { title: 'Fight Club', ids: { tmdb: 550 } } }],
+        shows: [{ user_rating: 9, user_rated_at: '2024-02-01T00:00:00Z', show: { title: 'GoT', ids: { tmdb: 1399 } } }],
+        anime: [
+          { user_rating: 10, user_rated_at: '2024-03-01T00:00:00Z', show: { title: 'HxH', ids: { mal: 11061 } } },
+          { user_rating: null, show: { title: 'Unrated', ids: { mal: 1 } } },
+        ],
+      },
+    }));
+
+    const out = await new SimklClient(cfg, creds).pullRatings();
+
+    expect(out).toHaveLength(3); // the null-rated anime is skipped
+    expect(out.filter((r) => r.ref.kind === 'show')).toHaveLength(2); // show + anime
+    expect(out.find((r) => r.ref.ids.tmdb === 550)).toMatchObject({ rating: 8 });
+  });
+
+  it('writes movie and show ratings and counts not_found', async () => {
+    const calls = routeFetch(() => ({ body: { not_found: { movies: [], shows: [] } } }));
+
+    const res = await new SimklClient(cfg, creds).pushRatings([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, rating: 8 },
+      { ref: { kind: 'show', ids: { tmdb: 1399 } }, rating: 9 },
+    ]);
+
+    expect(res.added).toBe(2);
+    const post = calls.find((c) => c.url.includes('/sync/ratings') && c.method === 'POST')!;
+    expect(post.body).toMatchObject({ movies: [{ rating: 8 }], shows: [{ rating: 9 }] });
+  });
+
+  it('reports an episode rating as not-found (Simkl cannot rate episodes)', async () => {
+    const calls = routeFetch(() => ({ body: {} }));
+
+    const res = await new SimklClient(cfg, creds).pushRatings([
+      { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 1 }, rating: 10 },
+    ]);
+
+    expect(res.notFound).toBe(1);
+    expect(res.added).toBe(0);
+    expect(calls.some((c) => c.method === 'POST' && c.url.includes('/sync/ratings'))).toBe(false);
+  });
+});

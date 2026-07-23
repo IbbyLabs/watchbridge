@@ -1,18 +1,34 @@
 import { describe, expect, it } from 'vitest';
 import { runSync, type SyncTarget } from './engine.js';
-import { emptyPushResult, type ProgressEvent, type ProviderId, type PushResult, type WatchEvent } from '../providers/types.js';
+import { itemKey } from './identity.js';
+import {
+  emptyPushResult,
+  type ProgressEvent,
+  type ProviderId,
+  type PushResult,
+  type RatingEvent,
+  type WatchEvent,
+} from '../providers/types.js';
 
 /** An in-memory provider that actually stores what is pushed, for round-trips. */
 class FakeProvider implements SyncTarget {
   history: WatchEvent[] = [];
   progress: ProgressEvent[] = [];
+  ratings: RatingEvent[] = [];
   constructor(
     readonly id: ProviderId,
     private readonly progressCapable = true,
+    private readonly ratingsCapable = false,
   ) {}
 
   capabilities() {
-    return { history: true, progress: this.progressCapable, ratings: false, watchlist: false, datedHistory: true };
+    return {
+      history: true,
+      progress: this.progressCapable,
+      ratings: this.ratingsCapable,
+      watchlist: false,
+      datedHistory: true,
+    };
   }
   async pullHistory() {
     return [...this.history];
@@ -26,6 +42,19 @@ class FakeProvider implements SyncTarget {
   }
   async pushProgress(events: ProgressEvent[]): Promise<PushResult> {
     this.progress.push(...events);
+    return { ...emptyPushResult(), added: events.length };
+  }
+  async pullRatings() {
+    return [...this.ratings];
+  }
+  async pushRatings(events: RatingEvent[]): Promise<PushResult> {
+    // Overwrite an existing rating for the same item, else append.
+    for (const e of events) {
+      const k = itemKey(e.ref);
+      const i = this.ratings.findIndex((r) => itemKey(r.ref) === k);
+      if (i >= 0) this.ratings[i] = e;
+      else this.ratings.push(e);
+    }
     return { ...emptyPushResult(), added: events.length };
   }
 }
@@ -148,5 +177,83 @@ describe('runSync honours filters', () => {
     expect(progress.added).toBe(1);
     expect(target.progress).toHaveLength(1);
     expect(target.progress[0].ref.kind).toBe('movie');
+  });
+});
+
+describe('runSync ratings', () => {
+  const now = () => new Date('2026-07-24T00:00:00Z');
+  const rate = (tmdb: number, rating: number): RatingEvent => ({ ref: { kind: 'movie', ids: { tmdb } }, rating });
+
+  it('notes unsupported when a side does not do ratings', async () => {
+    const source = new FakeProvider('pmdb', true, false);
+    const target = new FakeProvider('simkl', true, true);
+    const report = await runSync(source, target, { dataTypes: ['ratings'], preview: false, now });
+    const r = report.results.find((x) => x.dataType === 'ratings')!;
+    expect(r.note).toContain('does not expose ratings');
+    expect(r.planned).toBe(0);
+  });
+
+  it('applies source ratings the target lacks', async () => {
+    const source = new FakeProvider('trakt', true, true);
+    source.ratings = [rate(550, 8), rate(680, 9)];
+    const target = new FakeProvider('simkl', true, true);
+
+    const report = await runSync(source, target, {
+      dataTypes: ['ratings'],
+      preview: false,
+      ratingsAuthority: 'trakt',
+      now,
+    });
+
+    const r = report.results.find((x) => x.dataType === 'ratings')!;
+    expect(r.added).toBe(2);
+    expect(target.ratings).toHaveLength(2);
+  });
+
+  it('overwrites a conflicting rating when the source is the authority', async () => {
+    const source = new FakeProvider('trakt', true, true);
+    source.ratings = [rate(550, 9)];
+    const target = new FakeProvider('simkl', true, true);
+    target.ratings = [rate(550, 6)];
+
+    await runSync(source, target, {
+      dataTypes: ['ratings'],
+      preview: false,
+      ratingsAuthority: 'trakt',
+      now,
+    });
+
+    expect(target.ratings).toHaveLength(1);
+    expect(target.ratings[0].rating).toBe(9);
+  });
+
+  it('leaves a conflicting target rating alone when the target is the authority', async () => {
+    const source = new FakeProvider('trakt', true, true);
+    source.ratings = [rate(550, 9)];
+    const target = new FakeProvider('simkl', true, true);
+    target.ratings = [rate(550, 6)];
+
+    const report = await runSync(source, target, {
+      dataTypes: ['ratings'],
+      preview: false,
+      ratingsAuthority: 'simkl',
+      now,
+    });
+
+    expect(target.ratings[0].rating).toBe(6);
+    expect(report.results.find((x) => x.dataType === 'ratings')!.added).toBe(0);
+  });
+
+  it('is idempotent: a second run applies nothing', async () => {
+    const source = new FakeProvider('trakt', true, true);
+    source.ratings = [rate(550, 8)];
+    const target = new FakeProvider('simkl', true, true);
+    const opts = { dataTypes: ['ratings'] as const, preview: false, ratingsAuthority: 'trakt' as const, now };
+
+    await runSync(source, target, opts);
+    const second = await runSync(source, target, opts);
+
+    expect(second.results.find((x) => x.dataType === 'ratings')!.planned).toBe(0);
+    expect(target.ratings).toHaveLength(1);
   });
 });

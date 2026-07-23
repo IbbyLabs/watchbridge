@@ -8,10 +8,30 @@ import {
   type ProgressEvent,
   type ProviderCapabilities,
   type PushResult,
+  type RatingEvent,
   type WatchEvent,
 } from './types.js';
 
 const SIMKL_BASE = 'https://api.simkl.com';
+
+interface SimklRatedMovie {
+  user_rating?: number | null;
+  user_rated_at?: string | null;
+  movie: { title?: string; year?: number; ids: SimklIdBlock };
+}
+interface SimklRatedShow {
+  user_rating?: number | null;
+  user_rated_at?: string | null;
+  show: { title?: string; year?: number; ids: SimklIdBlock };
+}
+interface SimklRatingsResponse {
+  movies?: SimklRatedMovie[];
+  shows?: SimklRatedShow[];
+  anime?: SimklRatedShow[];
+}
+interface SimklRatingsWriteResponse {
+  not_found?: { movies?: unknown[]; shows?: unknown[] };
+}
 
 interface SimklIdBlock {
   simkl?: number;
@@ -394,6 +414,61 @@ export class SimklClient {
       result.notFoundRefs = rejected;
       result.notFound += rejected.length;
       result.added = sent - rejected.length;
+    } catch {
+      result.failed = events.length;
+    }
+    return result;
+  }
+
+  async pullRatings(): Promise<RatingEvent[]> {
+    // Movies and shows/anime only; Simkl does not rate episodes or seasons.
+    const res = await this.http.post<SimklRatingsResponse>('/sync/ratings', {});
+    const out: RatingEvent[] = [];
+    for (const m of res?.movies ?? []) {
+      if (m.user_rating == null) continue;
+      out.push({
+        ref: { kind: 'movie', ids: toIds(m.movie.ids), title: m.movie.title, year: m.movie.year },
+        rating: m.user_rating,
+        ratedAt: m.user_rated_at ?? null,
+      });
+    }
+    for (const s of [...(res?.shows ?? []), ...(res?.anime ?? [])]) {
+      if (s.user_rating == null) continue;
+      out.push({
+        ref: { kind: 'show', ids: toIds(s.show.ids), title: s.show.title, year: s.show.year },
+        rating: s.user_rating,
+        ratedAt: s.user_rated_at ?? null,
+      });
+    }
+    return out;
+  }
+
+  async pushRatings(events: RatingEvent[]): Promise<PushResult> {
+    const result = emptyPushResult();
+    const movies: Array<Record<string, unknown>> = [];
+    const shows: Array<Record<string, unknown>> = [];
+
+    for (const e of events) {
+      // Simkl rates movies and shows/anime only; episodes and seasons cannot be rated.
+      if (e.ref.kind !== 'movie' && e.ref.kind !== 'show') {
+        result.notFound++;
+        continue;
+      }
+      if (!hasId(e.ref.ids)) {
+        result.notFound++;
+        continue;
+      }
+      const entry = { rating: e.rating, rated_at: e.ratedAt ?? undefined, ids: e.ref.ids };
+      (e.ref.kind === 'movie' ? movies : shows).push(entry);
+    }
+
+    if (movies.length === 0 && shows.length === 0) return result;
+
+    try {
+      const res = await this.http.post<SimklRatingsWriteResponse>('/sync/ratings', { movies, shows });
+      const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
+      result.notFound += rejected;
+      result.added = movies.length + shows.length - rejected;
     } catch {
       result.failed = events.length;
     }
