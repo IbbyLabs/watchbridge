@@ -1,4 +1,4 @@
-import type { MediaRef, ProgressEvent, RatingEvent, WatchEvent } from '../providers/types.js';
+import type { MediaRef, ProgressEvent, RatingEvent, WatchEvent, WatchlistEvent } from '../providers/types.js';
 import { MatchIndex, hasIdentity, itemKey } from './identity.js';
 
 /**
@@ -169,6 +169,59 @@ export function planRatingsSync(
       }
     }
     plan.toApply.push(event);
+  }
+  return plan;
+}
+
+export interface WatchlistPlan {
+  toAdd: WatchlistEvent[];
+  toRemove: WatchlistEvent[];
+  unmatched: WatchlistEvent[];
+  skippedPresent: number;
+  skippedDuplicate: number;
+}
+
+/**
+ * Watchlist planning. A watchlist is set membership, so this adds source items
+ * the target lacks and, only when removals are opted in, removes target items
+ * the source no longer lists. Removals are suppressed entirely when the source
+ * is empty, so an unreachable or empty source can never clear a target's list.
+ */
+export function planWatchlistSync(
+  source: WatchlistEvent[],
+  target: WatchlistEvent[],
+  opts: { propagateRemovals: boolean },
+): WatchlistPlan {
+  const targetIndex = MatchIndex.from(target.map((e) => e.ref));
+  const seen = new Set<string>();
+  const plan: WatchlistPlan = { toAdd: [], toRemove: [], unmatched: [], skippedPresent: 0, skippedDuplicate: 0 };
+
+  for (const event of source) {
+    if (!hasIdentity(event.ref)) {
+      plan.unmatched.push(event);
+      continue;
+    }
+    const key = itemKey(event.ref)!;
+    if (seen.has(key)) {
+      plan.skippedDuplicate++;
+      continue;
+    }
+    seen.add(key);
+
+    if (targetIndex.has(event.ref)) {
+      plan.skippedPresent++;
+      continue;
+    }
+    plan.toAdd.push(event);
+  }
+
+  // Removals only when opted in, and never from an empty source (which would read
+  // as "the user cleared everything" and wipe the target).
+  if (opts.propagateRemovals && source.length > 0) {
+    const sourceIndex = MatchIndex.from(source.map((e) => e.ref));
+    for (const event of target) {
+      if (hasIdentity(event.ref) && !sourceIndex.has(event.ref)) plan.toRemove.push(event);
+    }
   }
   return plan;
 }

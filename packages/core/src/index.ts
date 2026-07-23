@@ -34,9 +34,11 @@ export {
   planHistorySync,
   planProgressSync,
   planRatingsSync,
+  planWatchlistSync,
   type HistoryPlan,
   type ProgressPlan,
   type RatingsPlan,
+  type WatchlistPlan,
 } from './sync/plan.js';
 export { includedByFilters, type SyncFilters } from './sync/filters.js';
 export {

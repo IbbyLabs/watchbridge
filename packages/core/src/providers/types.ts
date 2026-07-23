@@ -55,6 +55,12 @@ export interface RatingEvent {
   ratedAt?: string | null;
 }
 
+/** An item on a user's watchlist. Membership is all that matters. */
+export interface WatchlistEvent {
+  ref: MediaRef;
+  listedAt?: string | null;
+}
+
 export interface ProviderCapabilities {
   history: boolean;
   progress: boolean;
