@@ -59,9 +59,24 @@ export interface ProgressPlan {
 }
 
 /**
+ * Whether `sourceAt` should beat `targetAt`. When either timestamp is missing or
+ * unparseable we cannot compare, so the source is allowed through (source-wins
+ * fallback). Equal times do not count as newer.
+ */
+function isNewer(sourceAt: string | null | undefined, targetAt: string | null | undefined): boolean {
+  if (!sourceAt || !targetAt) return true;
+  const s = Date.parse(sourceAt);
+  const t = Date.parse(targetAt);
+  if (Number.isNaN(s) || Number.isNaN(t)) return true;
+  return s > t;
+}
+
+/**
  * Progress planning. Push a resume position when the target has no equal-or-newer
  * position for that item. A position is "unchanged" if the target's progress for
  * the same item is within 1 percentage point — avoids churning writes on tiny drift.
+ * When positions differ, the more recent `pausedAt` wins so a stale device cannot
+ * rewind one advanced elsewhere; if either side lacks a timestamp, the source wins.
  */
 export function planProgressSync(source: ProgressEvent[], target: ProgressEvent[]): ProgressPlan {
   const targetByKey = new Map<string, ProgressEvent>();
@@ -86,9 +101,19 @@ export function planProgressSync(source: ProgressEvent[], target: ProgressEvent[
     seen.add(key);
 
     const existing = targetByKey.get(key);
-    if (existing && Math.abs(existing.progress - event.progress) <= 1) {
-      plan.skippedUnchanged++;
-      continue;
+    if (existing) {
+      // Positions already agree closely enough — no churn either way.
+      if (Math.abs(existing.progress - event.progress) <= 1) {
+        plan.skippedUnchanged++;
+        continue;
+      }
+      // When both sides carry a paused-at time, the more recent position wins,
+      // so a stale device cannot rewind one advanced elsewhere. Without a time
+      // on either side, fall back to source-wins.
+      if (!isNewer(event.pausedAt, existing.pausedAt)) {
+        plan.skippedUnchanged++;
+        continue;
+      }
     }
     plan.toAdd.push(event);
   }

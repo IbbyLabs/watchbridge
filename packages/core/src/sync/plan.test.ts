@@ -141,4 +141,56 @@ describe('planProgressSync', () => {
     const plan = planProgressSync([prog(550, 80)], [prog(550, 40)]);
     expect(plan.toAdd).toHaveLength(1);
   });
+
+  const at = (tmdb: number, progress: number, pausedAt: string): ProgressEvent => ({
+    ref: { kind: 'movie', ids: { tmdb } },
+    progress,
+    pausedAt,
+  });
+
+  it('pushes when the source position is newer than the target', () => {
+    const plan = planProgressSync(
+      [at(550, 30, '2026-07-23T21:40:00Z')],
+      [at(550, 60, '2026-07-23T19:05:00Z')],
+    );
+    expect(plan.toAdd).toHaveLength(1);
+  });
+
+  it('does not push a stale source position over a newer target one', () => {
+    // The classic two-way rewind: a device left at 30% must not overwrite a
+    // position the user advanced to 60% more recently on another device.
+    const plan = planProgressSync(
+      [at(550, 30, '2026-07-23T19:05:00Z')],
+      [at(550, 60, '2026-07-23T21:40:00Z')],
+    );
+    expect(plan.toAdd).toHaveLength(0);
+    expect(plan.skippedUnchanged).toBe(1);
+  });
+
+  it('falls back to source-wins when the source has no timestamp', () => {
+    const plan = planProgressSync([prog(550, 30)], [at(550, 60, '2026-07-23T21:40:00Z')]);
+    expect(plan.toAdd).toHaveLength(1);
+  });
+
+  it('falls back to source-wins when the target has no timestamp', () => {
+    const plan = planProgressSync([at(550, 30, '2026-07-23T21:40:00Z')], [prog(550, 60)]);
+    expect(plan.toAdd).toHaveLength(1);
+  });
+
+  it('treats equal timestamps as no push, since neither is newer', () => {
+    const plan = planProgressSync(
+      [at(550, 30, '2026-07-23T21:40:00Z')],
+      [at(550, 60, '2026-07-23T21:40:00Z')],
+    );
+    expect(plan.toAdd).toHaveLength(0);
+  });
+
+  it('ignores timestamps when the positions already agree', () => {
+    const plan = planProgressSync(
+      [at(550, 60, '2026-07-23T21:40:00Z')],
+      [at(550, 60.5, '2026-07-23T19:05:00Z')],
+    );
+    expect(plan.toAdd).toHaveLength(0);
+    expect(plan.skippedUnchanged).toBe(1);
+  });
 });
