@@ -27,7 +27,8 @@ export interface RunOutcome {
 export function parseDataTypes(raw: string): DataType[] {
   try {
     const arr = JSON.parse(raw) as unknown;
-    if (Array.isArray(arr)) return arr.filter((x): x is DataType => x === 'history' || x === 'progress');
+    if (Array.isArray(arr))
+      return arr.filter((x): x is DataType => x === 'history' || x === 'progress' || x === 'ratings');
   } catch {
     // fall through
   }
@@ -103,6 +104,7 @@ export class SyncRunner {
 
     const cursors = parseCursors(sync.cursors);
     const filters = parseFilters(sync.filters);
+    const ratingsAuthority = (sync.ratingsAuthority as ProviderId | null) ?? undefined;
     const key = (provider: string) => `${provider}:history`;
     const reports: SyncReport[] = [];
     try {
@@ -110,6 +112,7 @@ export class SyncRunner {
         dataTypes,
         preview,
         filters,
+        ratingsAuthority,
         since: cursors[key(sync.source)] ?? null,
         deliveredHistory: await this.deliveries.load(sync.id, sync.target),
       });
@@ -124,6 +127,7 @@ export class SyncRunner {
           dataTypes,
           preview,
           filters,
+          ratingsAuthority,
           since: cursors[key(sync.target)] ?? null,
           deliveredHistory: await this.deliveries.load(sync.id, sync.source),
         });

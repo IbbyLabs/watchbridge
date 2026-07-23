@@ -123,6 +123,8 @@ export const syncs = pgTable(
     cursors: text('cursors').notNull().default('{}'),
     /** Per-sync scope filters (SyncFilters JSON); null means sync everything. */
     filters: text('filters'),
+    /** For ratings syncs: the provider whose rating wins a conflict. */
+    ratingsAuthority: text('ratings_authority'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     lastRunAt: timestamp('last_run_at', { withTimezone: true }),

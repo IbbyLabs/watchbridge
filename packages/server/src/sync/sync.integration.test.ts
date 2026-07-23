@@ -146,3 +146,29 @@ describe('sync end-to-end (trakt -> pmdb history)', () => {
     expect(after.json().reports[0].results[0]).toMatchObject({ planned: 0, skippedPresent: 1 });
   });
 });
+
+describe('ratings sync validation', () => {
+  it('rejects a ratings sync with no authority, then accepts one with a valid authority', async () => {
+    const bad = await authed({
+      method: 'POST',
+      url: '/api/syncs',
+      payload: { name: 'R', source: 'trakt', target: 'pmdb', dataTypes: ['ratings'] },
+    });
+    expect(bad.statusCode).toBe(400);
+
+    const wrong = await authed({
+      method: 'POST',
+      url: '/api/syncs',
+      payload: { name: 'R', source: 'trakt', target: 'pmdb', dataTypes: ['ratings'], ratingsAuthority: 'simkl' },
+    });
+    expect(wrong.statusCode).toBe(400);
+
+    const ok = await authed({
+      method: 'POST',
+      url: '/api/syncs',
+      payload: { name: 'R', source: 'trakt', target: 'pmdb', dataTypes: ['ratings'], ratingsAuthority: 'trakt' },
+    });
+    expect(ok.statusCode).toBe(201);
+    expect(ok.json().ratingsAuthority).toBe('trakt');
+  });
+})

@@ -10,7 +10,7 @@ import { parseDataTypes, type SyncRunner } from '../sync/runner.js';
 import type { SyncScheduler } from '../sync/scheduler.js';
 
 const provider = z.enum(['trakt', 'simkl', 'pmdb', 'mdblist']);
-const dataType = z.enum(['history', 'progress']);
+const dataType = z.enum(['history', 'progress', 'ratings']);
 
 const externalIds = z
   .object({
@@ -44,10 +44,15 @@ const createBody = z
     direction: z.enum(['one_way', 'two_way']).default('one_way'),
     intervalMinutes: z.number().int().positive().nullable().optional(),
     filters: filters.nullable().optional(),
+    ratingsAuthority: provider.nullable().optional(),
   })
   .refine((v) => v.source !== v.target, {
     message: 'source and target must differ',
     path: ['target'],
+  })
+  .refine((v) => !v.dataTypes.includes('ratings') || v.ratingsAuthority === v.source || v.ratingsAuthority === v.target, {
+    message: 'ratings syncs need a ratings authority of the source or target',
+    path: ['ratingsAuthority'],
   });
 
 const patchBody = z.object({
@@ -56,6 +61,7 @@ const patchBody = z.object({
   direction: z.enum(['one_way', 'two_way']).optional(),
   intervalMinutes: z.number().int().positive().nullable().optional(),
   filters: filters.nullable().optional(),
+  ratingsAuthority: provider.nullable().optional(),
   enabled: z.boolean().optional(),
 });
 
@@ -84,6 +90,7 @@ function toPublic(s: Sync) {
     direction: s.direction,
     intervalMinutes: s.intervalMinutes,
     filters: parseFilters(s.filters),
+    ratingsAuthority: s.ratingsAuthority,
     enabled: s.enabled,
     lastRunAt: s.lastRunAt,
     createdAt: s.createdAt,
@@ -135,6 +142,7 @@ export function syncRoutes(
       direction: data.direction,
       intervalMinutes: clampInterval(data.intervalMinutes),
       filters: serializeFilters(data.filters),
+      ratingsAuthority: data.dataTypes.includes('ratings') ? (data.ratingsAuthority ?? null) : null,
     });
     const [row] = await db.orm.select().from(syncs).where(eq(syncs.id, id)).limit(1);
     return reply.code(201).send(toPublic(row!));
@@ -147,6 +155,24 @@ export function syncRoutes(
     if (!parsed.success)
       return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
     const d = parsed.data;
+
+    // Validate the ratings authority against the sync's state after the patch.
+    const nextDataTypes = d.dataTypes ?? parseDataTypes(existing.dataTypes);
+    const nextAuthority =
+      d.ratingsAuthority !== undefined ? d.ratingsAuthority : existing.ratingsAuthority;
+    if (
+      nextDataTypes.includes('ratings') &&
+      nextAuthority !== existing.source &&
+      nextAuthority !== existing.target
+    ) {
+      return reply.code(400).send({
+        error: 'invalid_input',
+        message: 'ratings syncs need a ratings authority of the source or target',
+      });
+    }
+    // Ratings authority only means anything for a ratings sync; clear it otherwise.
+    const authorityValue = nextDataTypes.includes('ratings') ? (nextAuthority ?? null) : null;
+
     await db.orm
       .update(syncs)
       .set({
@@ -157,6 +183,9 @@ export function syncRoutes(
           ? { intervalMinutes: clampInterval(d.intervalMinutes) }
           : {}),
         ...(d.filters !== undefined ? { filters: serializeFilters(d.filters) } : {}),
+        ...(d.dataTypes !== undefined || d.ratingsAuthority !== undefined
+          ? { ratingsAuthority: authorityValue }
+          : {}),
         ...(d.enabled !== undefined ? { enabled: d.enabled } : {}),
         updatedAt: new Date(),
       })
