@@ -33,8 +33,10 @@ export { idStrings, itemKey, hasIdentity, MatchIndex } from './sync/identity.js'
 export {
   planHistorySync,
   planProgressSync,
+  planRatingsSync,
   type HistoryPlan,
   type ProgressPlan,
+  type RatingsPlan,
 } from './sync/plan.js';
 export { includedByFilters, type SyncFilters } from './sync/filters.js';
 export {

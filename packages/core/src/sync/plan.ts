@@ -1,4 +1,4 @@
-import type { MediaRef, ProgressEvent, WatchEvent } from '../providers/types.js';
+import type { MediaRef, ProgressEvent, RatingEvent, WatchEvent } from '../providers/types.js';
 import { MatchIndex, hasIdentity, itemKey } from './identity.js';
 
 /**
@@ -116,6 +116,59 @@ export function planProgressSync(source: ProgressEvent[], target: ProgressEvent[
       }
     }
     plan.toAdd.push(event);
+  }
+  return plan;
+}
+
+export interface RatingsPlan {
+  toApply: RatingEvent[];
+  unmatched: RatingEvent[];
+  skippedDuplicate: number;
+  skippedUnchanged: number;
+}
+
+/**
+ * Ratings planning. Unlike history, ratings are update semantics: a re-rate
+ * changes a value rather than adding a play, so an identical rating must be a
+ * no-op (rewriting it would churn `rated_at`). Conflicts are resolved by a
+ * per-sync authoritative side: when the source is authoritative it overwrites a
+ * differing target rating; otherwise it only fills a rating the target lacks.
+ */
+export function planRatingsSync(
+  source: RatingEvent[],
+  target: RatingEvent[],
+  opts: { sourceIsAuthoritative: boolean },
+): RatingsPlan {
+  const targetByKey = new Map<string, RatingEvent>();
+  for (const e of target) {
+    const key = itemKey(e.ref);
+    if (key) targetByKey.set(key, e);
+  }
+
+  const seen = new Set<string>();
+  const plan: RatingsPlan = { toApply: [], unmatched: [], skippedDuplicate: 0, skippedUnchanged: 0 };
+
+  for (const event of source) {
+    if (!hasIdentity(event.ref)) {
+      plan.unmatched.push(event);
+      continue;
+    }
+    const key = itemKey(event.ref)!;
+    if (seen.has(key)) {
+      plan.skippedDuplicate++;
+      continue;
+    }
+    seen.add(key);
+
+    const existing = targetByKey.get(key);
+    if (existing) {
+      // Same score, or the target owns this conflict — leave it alone.
+      if (existing.rating === event.rating || !opts.sourceIsAuthoritative) {
+        plan.skippedUnchanged++;
+        continue;
+      }
+    }
+    plan.toApply.push(event);
   }
   return plan;
 }

@@ -48,6 +48,13 @@ export interface ProgressEvent {
   runtimeMs?: number;
 }
 
+/** A user's rating for an item. Scale is 1–10 (Trakt and Simkl both use it). */
+export interface RatingEvent {
+  ref: MediaRef;
+  rating: number;
+  ratedAt?: string | null;
+}
+
 export interface ProviderCapabilities {
   history: boolean;
   progress: boolean;
