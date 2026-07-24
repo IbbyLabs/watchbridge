@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SimklClient } from './simkl.js';
+import { RateGate } from './rateGate.js';
 
 function routeFetch(handler: (url: string, method: string, body: unknown) => { status?: number; body?: unknown }) {
   const calls: { url: string; method: string; body: unknown }[] = [];
@@ -15,7 +16,17 @@ function routeFetch(handler: (url: string, method: string, body: unknown) => { s
   return calls;
 }
 
-const cfg = { clientId: 'scid', clientSecret: 'ssec', accessToken: 'tok', appName: 'Watchbridge', appVersion: '9.9.9' };
+const cfg = {
+  clientId: 'scid',
+  clientSecret: 'ssec',
+  accessToken: 'tok',
+  appName: 'Watchbridge',
+  appVersion: '9.9.9',
+  // Isolated from the process-wide pacer, which would otherwise serialize the suite.
+  get gate() {
+    return new RateGate();
+  },
+};
 
 afterEach(() => vi.restoreAllMocks());
 

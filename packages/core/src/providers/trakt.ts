@@ -1,4 +1,5 @@
 import { HttpClient, HttpError } from './http.js';
+import { sharedRateGate, type RateGate } from './rateGate.js';
 import {
   emptyPushResult,
   positionFromRuntime,
@@ -90,6 +91,8 @@ export interface TraktConfig {
   tokens?: TraktTokens;
   /** Persist refreshed tokens (server wires this to the connection store). */
   onRefresh?: (tokens: TraktTokens) => Promise<void>;
+  /** Override the process-wide pacer. Mainly so tests are not serialized by it. */
+  gate?: RateGate;
 }
 
 const toIds = (b: TraktIdBlock): ExternalIds => ({
@@ -112,6 +115,9 @@ export class TraktClient {
       // 1000 GET per 5 minutes (~3.3/sec) but only 1 write per second.
       minIntervalMs: 350,
       writeMinIntervalMs: 1_000,
+      // Trakt counts every request against the app's client_id, so pacing has to
+      // span all of this process's Trakt clients, not just this one.
+      gate: cfg.gate ?? sharedRateGate('trakt'),
       headers: {
         'trakt-api-version': '2',
         'trakt-api-key': cfg.clientId,

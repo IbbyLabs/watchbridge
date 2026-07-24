@@ -1,4 +1,5 @@
 import { createLogger } from '../logger.js';
+import type { RateGate } from './rateGate.js';
 
 const log = createLogger('http');
 
@@ -23,6 +24,11 @@ export interface HttpOptions {
   /** Floor on any backoff wait, ms. Stops `Retry-After: 0` becoming a hot retry. */
   minBackoffMs?: number;
   timeoutMs?: number;
+  /**
+   * Pacing shared with every other client for the same upstream. Without it each
+   * client paces alone, so concurrent syncs multiply the real request rate.
+   */
+  gate?: RateGate;
 }
 
 export class HttpError extends Error {
@@ -47,11 +53,14 @@ const isWrite = (method: string): boolean =>
  * connection so pacing is isolated per upstream.
  */
 export class HttpClient {
-  private readonly opts: Required<HttpOptions>;
+  private readonly opts: Required<Omit<HttpOptions, 'gate'>>;
+  private readonly gate?: RateGate;
   private chain: Promise<unknown> = Promise.resolve();
   private lastAt = 0;
 
   constructor(options: HttpOptions) {
+    const { gate, ...rest } = options;
+    this.gate = gate;
     this.opts = {
       headers: {},
       defaultQuery: {},
@@ -60,7 +69,7 @@ export class HttpClient {
       maxBackoffMs: 60_000,
       minBackoffMs: 1_000,
       timeoutMs: 20_000,
-      ...options,
+      ...rest,
       // Writes default to the read interval when the caller does not set one.
       writeMinIntervalMs: options.writeMinIntervalMs ?? options.minIntervalMs ?? 0,
     };
@@ -96,6 +105,9 @@ export class HttpClient {
   private async pace(method: string): Promise<void> {
     const interval = isWrite(method) ? this.opts.writeMinIntervalMs : this.opts.minIntervalMs;
     if (interval <= 0) return;
+    // A shared gate paces the whole app against this upstream; without one the
+    // client only knows about its own traffic.
+    if (this.gate) return this.gate.acquire(interval);
     const wait = this.lastAt + interval - Date.now();
     if (wait > 0) await sleep(wait);
     this.lastAt = Date.now();

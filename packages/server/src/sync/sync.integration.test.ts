@@ -257,3 +257,35 @@ describe('last run status', () => {
     expect(list.find((s) => s.id === id)!.lastRunStatus).toBeNull();
   });
 });
+
+describe('preview goes through the same gate as a run', () => {
+  it('refuses a second concurrent operation on the same sync', async () => {
+    const created = await authed({
+      method: 'POST',
+      url: '/api/syncs',
+      payload: { name: 'G', source: 'trakt', target: 'pmdb', dataTypes: ['history'] },
+    });
+    const id = created.json().id;
+
+    const [a, b] = await Promise.all([
+      authed({ method: 'POST', url: `/api/syncs/${id}/preview` }),
+      authed({ method: 'POST', url: `/api/syncs/${id}/preview` }),
+    ]);
+
+    const outcomes = [a.json(), b.json()];
+    const refused = outcomes.filter((o) => o.status === 'error');
+    expect(refused).toHaveLength(1);
+    expect(refused[0].error).toMatch(/already in progress/);
+  });
+
+  it('still previews normally on its own', async () => {
+    const created = await authed({
+      method: 'POST',
+      url: '/api/syncs',
+      payload: { name: 'G2', source: 'trakt', target: 'pmdb', dataTypes: ['history'] },
+    });
+    const res = await authed({ method: 'POST', url: `/api/syncs/${created.json().id}/preview` });
+    expect(res.json().status).not.toBe('error');
+    expect(res.json().reports[0].results[0].dataType).toBe('history');
+  });
+});

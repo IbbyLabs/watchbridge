@@ -1,4 +1,5 @@
 import { HttpClient, HttpError } from './http.js';
+import { sharedRateGate, type RateGate } from './rateGate.js';
 import { sharesAnyId } from '../sync/identity.js';
 import {
   emptyPushResult,
@@ -82,6 +83,8 @@ export interface SimklConfig {
   accessToken?: string;
   appName?: string;
   appVersion?: string;
+  /** Override the process-wide pacer. Mainly so tests are not serialized by it. */
+  gate?: RateGate;
 }
 
 const num = (v: unknown): number | undefined => {
@@ -114,6 +117,9 @@ export class SimklClient {
       // overage gets the client_id suspended without warning.
       minIntervalMs: 300,
       writeMinIntervalMs: 1_000,
+      // Simkl suspends a client_id for sustained overage, and it counts every
+      // request made with the key — so all Simkl clients share one pacer.
+      gate: cfg.gate ?? sharedRateGate('simkl'),
       headers: {
         'simkl-api-key': cfg.clientId,
         'user-agent': `${cfg.appName ?? 'Watchbridge'}/${cfg.appVersion ?? '0.1.0'}`,

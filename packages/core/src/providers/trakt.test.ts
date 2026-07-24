@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TraktClient } from './trakt.js';
+import { RateGate } from './rateGate.js';
 import type { ProgressEvent, WatchEvent } from './types.js';
 
 interface Recorded {
@@ -24,7 +25,14 @@ function routeFetch(handler: (rec: Recorded) => { status?: number; body?: unknow
   return calls;
 }
 
-const cfg = { clientId: 'cid', clientSecret: 'sec' };
+const cfg = {
+  clientId: 'cid',
+  clientSecret: 'sec',
+  // Isolated from the process-wide pacer, which would otherwise serialize the suite.
+  get gate() {
+    return new RateGate();
+  },
+};
 const future = () => Date.now() + 3_600_000;
 
 afterEach(() => vi.restoreAllMocks());

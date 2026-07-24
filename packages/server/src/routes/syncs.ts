@@ -6,7 +6,7 @@ import type { AppConfig } from '@watchbridge/core';
 import { requireAuth } from '../plugins/auth.js';
 import type { Db } from '../db/client.js';
 import { syncs, syncRuns, type Sync } from '../db/schema.js';
-import { parseDataTypes, type SyncRunner } from '../sync/runner.js';
+import { parseDataTypes } from '../sync/runner.js';
 import type { SyncScheduler } from '../sync/scheduler.js';
 
 const provider = z.enum(['trakt', 'simkl', 'pmdb', 'mdblist']);
@@ -109,7 +109,6 @@ function toPublic(s: Sync) {
 export function syncRoutes(
   app: FastifyInstance,
   db: Db,
-  runner: SyncRunner,
   scheduler: SyncScheduler,
   config: AppConfig,
 ): void {
@@ -233,7 +232,7 @@ export function syncRoutes(
   app.post('/api/syncs/:id/preview', auth, async (request, reply) => {
     const sync = await load(request);
     if (!sync) return reply.code(404).send({ error: 'not_found' });
-    const outcome = await runner.preview(sync);
+    const outcome = await scheduler.previewNow(sync);
     return reply.send(outcome);
   });
 

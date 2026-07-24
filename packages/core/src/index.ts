@@ -18,6 +18,7 @@ export { loadConfig, ConfigStartupError, type AppConfig, type RawEnv } from './c
 // Providers
 export * from './providers/types.js';
 export { HttpClient, HttpError } from './providers/http.js';
+export { RateGate, sharedRateGate } from './providers/rateGate.js';
 export {
   TraktClient,
   type TraktTokens,

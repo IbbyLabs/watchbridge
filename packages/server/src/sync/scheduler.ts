@@ -2,7 +2,7 @@ import { and, eq, isNotNull } from 'drizzle-orm';
 import { createLogger, type AppConfig } from '@watchbridge/core';
 import type { Db } from '../db/client.js';
 import { syncs, type Sync } from '../db/schema.js';
-import type { RunOutcome, SyncRunner } from './runner.js';
+import type { RunOutcome, SyncRunner, Trigger } from './runner.js';
 
 const log = createLogger('scheduler');
 
@@ -92,6 +92,15 @@ export class SyncScheduler {
     return this.dispatch(sync, 'manual');
   }
 
+  /**
+   * Plan a sync without writing anything. A preview writes nothing but reads just
+   * as much, so it goes through the same gate — otherwise repeated previews are an
+   * unbounded burst of provider reads, which is what gets an API key suspended.
+   */
+  previewNow(sync: Sync): Promise<RunOutcome> {
+    return this.dispatch(sync, 'preview');
+  }
+
   private async tick(): Promise<void> {
     const now = Date.now();
     let due: Sync[];
@@ -113,7 +122,7 @@ export class SyncScheduler {
     }
   }
 
-  private dispatch(sync: Sync, trigger: 'manual' | 'scheduled'): Promise<RunOutcome> {
+  private dispatch(sync: Sync, trigger: Trigger): Promise<RunOutcome> {
     if (this.inFlight.has(sync.id)) {
       return Promise.resolve({ status: 'error', reports: [], error: 'A run for this sync is already in progress' });
     }
