@@ -599,6 +599,36 @@ Overall the audit is thorough on sync correctness, provider quirks, and observab
 - `100-item third-party 'Physical Library' cap` and the `1000-item list cap` both check out against Trakt's 2026 fair-use-policy changes and forum threads — no issue, just noting these are solid.
 
 
+## Shipped from this backlog
+
+Items below have been built and tested since the audit was written. They stay in the
+tables above for context; this list is the authoritative record of what is done.
+
+| Item | Where |
+|---|---|
+| Trakt mandatory pagination on every pull path (#1, #2) | `packages/core/src/providers/trakt.ts` `pageAll` |
+| Separate read and write pacing per provider (#12, #25) | `packages/core/src/providers/http.ts` `writeMinIntervalMs` |
+| Progress planning honours timestamps instead of pushing backward (#24) | `planProgressSync` |
+| Simkl history push reads `not_found` back (#21) | `refsRejectedBy` |
+| Empty/partial source can never drive a removal (#6) | `planWatchlistSync` empty-source refusal |
+| A failing data type no longer discards the rest of the run (#20) | `runSync` per-type isolation |
+| Connection flagged for reconnection when credentials are rejected (#7, #14 partial) | `ConnectionService.watchCredentials` |
+| Last-run outcome visible per sync (#26) | `LastRunPill` on the syncs page |
+| Ratings sync (Trakt <-> Simkl) | `planRatingsSync`, provider `pull/pushRatings` |
+| Watchlist sync (Trakt <-> Simkl) | `planWatchlistSync`, provider `pull/push/removeWatchlist` |
+| Per-sync scope filters | `packages/core/src/sync/filters.ts` |
+| Startup guard for an unusable encryption key | `packages/server/src/db/encryptionKey.ts` |
+| Structured per-run logging | `SyncRunner.logRun` |
+
+Still open and worth noting:
+
+- **#9 `/scrobble/pause` on a cold item.** Trakt's contract documents `/scrobble/stop` as
+  scrobbling a play above 80% and saving a resume position between 1% and 79%; `/scrobble/pause`
+  is documented only as pausing an *active* scrobble. Whether a cold pause persists a position
+  needs a live account to settle, so the current behaviour is unchanged.
+- **Proactive notification of a dead connection.** The state is now detected and shown in the UI;
+  emailing or webhooking it is a separate decision about unsolicited messaging.
+
 ## Method notes and raw data
 
 - Scoring checked each finding against a generated map of the whole codebase (every source file,
