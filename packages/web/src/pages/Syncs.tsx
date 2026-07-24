@@ -192,7 +192,7 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
       <div className="mt-3 border-t border-border pt-3">
         <button
           onClick={loadRuns}
-          className="text-xs font-medium text-muted transition-colors hover:text-ink"
+          className="text-xs font-medium text-muted transition-colors hover:text-ink inline-flex min-h-[24px] min-w-[24px] items-center justify-center rounded px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         >
           {runs ? 'Hide run history' : 'Run history'}
         </button>

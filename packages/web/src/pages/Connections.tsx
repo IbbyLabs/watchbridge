@@ -66,9 +66,9 @@ export function Connections() {
       </header>
 
       {connectedParam && (
-        <div className="mb-4 flex items-center justify-between rounded-lg bg-success/15 px-3 py-2 text-sm text-success">
+        <div role="status" className="mb-4 flex items-center justify-between rounded-lg bg-success/15 px-3 py-2 text-sm text-success">
           <span>Connected {PROVIDER_LABEL[connectedParam as ProviderId] ?? connectedParam}.</span>
-          <button onClick={clearBanner} className="text-xs opacity-80 hover:opacity-100">
+          <button onClick={clearBanner} className="text-xs opacity-80 hover:opacity-100 inline-flex min-h-[24px] min-w-[24px] items-center justify-center rounded px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg">
             Dismiss
           </button>
         </div>
@@ -79,7 +79,7 @@ export function Connections() {
             Couldn’t connect {PROVIDER_LABEL[errorParam as ProviderId] ?? errorParam}. Please try
             again.
           </span>
-          <button onClick={clearBanner} className="text-xs opacity-80 hover:opacity-100">
+          <button onClick={clearBanner} className="text-xs opacity-80 hover:opacity-100 inline-flex min-h-[24px] min-w-[24px] items-center justify-center rounded px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg">
             Dismiss
           </button>
         </div>
@@ -141,7 +141,7 @@ export function Connections() {
                     </Button>
                     <button
                       onClick={() => setLinking(provider)}
-                      className="text-xs text-faint transition-colors hover:text-muted"
+                      className="text-xs text-faint transition-colors hover:text-muted inline-flex min-h-[24px] min-w-[24px] items-center justify-center rounded px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
                     >
                       Use a code instead
                     </button>
@@ -292,7 +292,7 @@ function DeviceModal({
   return (
     <Modal title={title} onClose={onClose}>
       {status === 'starting' && (
-        <div className="flex items-center gap-2 text-sm text-muted">
+        <div role="status" aria-live="polite" className="flex items-center gap-2 text-sm text-muted">
           <Spinner /> Preparing…
         </div>
       )}
@@ -308,7 +308,7 @@ function DeviceModal({
                 href={state.url}
                 target="_blank"
                 rel="noreferrer"
-                className="font-medium text-brand-ink hover:underline"
+                className="font-medium text-brand-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded"
               >
                 {state.url.replace('https://', '')}
               </a>

@@ -22,7 +22,7 @@ export function ResetPassword() {
         </p>
         <Link
           to="/forgot-password"
-          className="mt-4 block text-center text-sm font-medium text-brand-ink hover:underline"
+          className="mt-4 block text-center text-sm font-medium text-brand-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded"
         >
           Request a new link
         </Link>

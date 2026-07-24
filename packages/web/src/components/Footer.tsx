@@ -41,7 +41,8 @@ function IconMessage(p: SVGProps<SVGSVGElement>) {
 }
 
 const linkClass =
-  'inline-flex items-center gap-1.5 text-faint transition-colors hover:text-ink focus-visible:text-ink focus-visible:outline-none';
+  'inline-flex min-h-[24px] items-center gap-1.5 rounded px-1 py-0.5 text-faint transition-colors hover:text-ink ' +
+  'focus-visible:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg';
 
 export function Footer() {
   return (

@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect, type ReactNode } from 'react';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { SessionProvider, useSession } from './lib/session.tsx';
 import { Layout } from './components/Layout.tsx';
 import { Spinner } from './components/ui.tsx';
@@ -10,6 +10,29 @@ import { ResetPassword } from './pages/ResetPassword.tsx';
 import { Connections } from './pages/Connections.tsx';
 import { Syncs } from './pages/Syncs.tsx';
 import { Settings } from './pages/Settings.tsx';
+
+const PAGE_TITLE: Record<string, string> = {
+  '/login': 'Sign in',
+  '/register': 'Create an account',
+  '/forgot-password': 'Reset your password',
+  '/reset-password': 'Choose a new password',
+  '/syncs': 'Syncs',
+  '/connections': 'Connections',
+  '/settings': 'Settings',
+};
+
+/**
+ * A single-page app never reloads, so without this the tab keeps whatever title
+ * it had at first load and screen readers get no cue that the page changed.
+ */
+function RouteAnnouncer() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    const page = PAGE_TITLE[pathname];
+    document.title = page ? `${page} · Watchbridge` : 'Watchbridge';
+  }, [pathname]);
+  return null;
+}
 
 function FullPageSpinner() {
   return (
@@ -37,6 +60,7 @@ export function App() {
   return (
     <SessionProvider>
       <BrowserRouter>
+        <RouteAnnouncer />
         <Routes>
           <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
           <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />

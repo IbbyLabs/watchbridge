@@ -146,7 +146,7 @@ function ChangePassword() {
             />
           </Field>
           {done && (
-            <p className="rounded-lg bg-success/15 px-3 py-2 text-sm text-success">
+            <p role="status" className="rounded-lg bg-success/15 px-3 py-2 text-sm text-success">
               Password updated. Other devices have been signed out.
             </p>
           )}

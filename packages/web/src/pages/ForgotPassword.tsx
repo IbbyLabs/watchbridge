@@ -25,11 +25,11 @@ export function ForgotPassword() {
     <AuthShell title="Reset password" subtitle="We'll email you a link to set a new one.">
       {sent ? (
         <div className="space-y-4">
-          <p className="rounded-lg bg-success/15 px-3 py-2 text-sm text-success">
+          <p role="status" className="rounded-lg bg-success/15 px-3 py-2 text-sm text-success">
             If an account exists for {email || 'that address'}, a reset link is on its way. It expires in
             1 hour.
           </p>
-          <Link to="/login" className="block text-center text-sm font-medium text-brand-ink hover:underline">
+          <Link to="/login" className="block text-center text-sm font-medium text-brand-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded">
             Back to sign in
           </Link>
         </div>
@@ -51,7 +51,7 @@ export function ForgotPassword() {
           </form>
           <p className="mt-6 text-center text-sm text-muted">
             Remembered it?{' '}
-            <Link to="/login" className="font-medium text-brand-ink hover:underline">
+            <Link to="/login" className="font-medium text-brand-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded">
               Sign in
             </Link>
           </p>

@@ -26,6 +26,12 @@ export function Layout({ children }: { children: ReactNode }) {
   const { user } = useSession();
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[240px_1fr]">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-elevated focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+      >
+        Skip to content
+      </a>
       {/* Desktop sidebar */}
       <aside className="sticky top-0 hidden h-dvh flex-col border-r border-border bg-surface p-4 md:flex">
         <div className="px-2 py-2">
@@ -37,7 +43,7 @@ export function Layout({ children }: { children: ReactNode }) {
               key={to}
               to={to}
               className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
                   isActive ? 'bg-elevated text-ink' : 'text-muted hover:bg-elevated/60 hover:text-ink'
                 }`
               }
@@ -50,7 +56,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <NavLink
           to="/settings"
           className={({ isActive }) =>
-            `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
+            `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
               isActive ? 'bg-elevated text-ink' : 'text-muted hover:bg-elevated hover:text-ink'
             }`
           }
@@ -65,7 +71,11 @@ export function Layout({ children }: { children: ReactNode }) {
         <Wordmark />
       </header>
 
-      <main className="mx-auto flex w-full max-w-4xl flex-col px-4 pb-28 pt-6 md:px-8 md:py-8 md:pb-8">
+      <main
+        id="main"
+        tabIndex={-1}
+        className="mx-auto flex w-full max-w-4xl flex-col px-4 pb-28 pt-6 focus:outline-none md:px-8 md:py-8 md:pb-8"
+      >
         <div className="flex-1">{children}</div>
         <Footer />
       </main>
@@ -80,7 +90,7 @@ export function Layout({ children }: { children: ReactNode }) {
             key={to}
             to={to}
             className={({ isActive }) =>
-              `flex flex-col items-center gap-1 py-2.5 text-[11px] font-medium transition-colors ${
+              `flex flex-col items-center gap-1 py-2.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${
                 isActive ? 'text-brand-ink' : 'text-muted'
               }`
             }

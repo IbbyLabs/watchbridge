@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { createContext, useContext, useEffect, useId, useRef } from 'react';
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
@@ -33,6 +33,13 @@ export function Card({ children, className = '' }: { children: ReactNode; classN
   return <div className={`rounded-xl border border-border bg-surface ${className}`}>{children}</div>;
 }
 
+/**
+ * Lets `Input`/`Select` pick up the surrounding field's hint or error without
+ * every caller having to thread ids through by hand. The `<label>` wrapper
+ * already associates the label itself; this covers the description.
+ */
+const FieldContext = createContext<{ describedBy?: string; invalid: boolean }>({ invalid: false });
+
 export function Field({
   label,
   hint,
@@ -44,22 +51,33 @@ export function Field({
   error?: string;
   children: ReactNode;
 }) {
+  const helpId = `${useId()}-help`;
+  const described = error || hint ? helpId : undefined;
   return (
-    <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-ink">{label}</span>
-      {children}
-      {error ? (
-        <span role="alert" className="mt-1 block text-xs text-danger">{error}</span>
-      ) : hint ? (
-        <span className="mt-1 block text-xs text-faint">{hint}</span>
-      ) : null}
-    </label>
+    <FieldContext.Provider value={{ describedBy: described, invalid: Boolean(error) }}>
+      <label className="block">
+        <span className="mb-1.5 block text-sm font-medium text-ink">{label}</span>
+        {children}
+        {error ? (
+          <span id={helpId} role="alert" className="mt-1 block text-xs text-danger">
+            {error}
+          </span>
+        ) : hint ? (
+          <span id={helpId} className="mt-1 block text-xs text-faint">
+            {hint}
+          </span>
+        ) : null}
+      </label>
+    </FieldContext.Provider>
   );
 }
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+  const field = useContext(FieldContext);
   return (
     <input
+      aria-describedby={field.describedBy}
+      aria-invalid={field.invalid || undefined}
       {...props}
       className={`w-full rounded-lg border border-border bg-elevated px-3 py-2 text-sm text-ink placeholder:text-faint transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40 ${props.className ?? ''}`}
     />
@@ -67,8 +85,11 @@ export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
 }
 
 export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
+  const field = useContext(FieldContext);
   return (
     <select
+      aria-describedby={field.describedBy}
+      aria-invalid={field.invalid || undefined}
       {...props}
       className={`w-full rounded-lg border border-border bg-elevated px-3 py-2 text-sm text-ink transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/40 ${props.className ?? ''}`}
     />
@@ -109,17 +130,48 @@ export function EmptyState({ title, children }: { title: string; children?: Reac
   );
 }
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Whatever opened the dialog gets focus back when it closes, so the keyboard
+    // does not jump to the top of the page.
+    const opener = document.activeElement as HTMLElement | null;
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      // Keep Tab inside the dialog; otherwise it walks into the page behind the
+      // overlay, which is still there and still clickable-looking.
+      const items = [...(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])];
+      if (items.length === 0) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && (active === first || active === dialogRef.current)) {
+        e.preventDefault();
+        last.focus();
+      }
     };
     document.addEventListener('keydown', onKey);
+
     // Move focus into the dialog for keyboard and screen-reader users.
-    dialogRef.current?.focus();
-    return () => document.removeEventListener('keydown', onKey);
+    const firstField = dialogRef.current?.querySelector<HTMLElement>(FOCUSABLE);
+    (firstField ?? dialogRef.current)?.focus();
+
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      opener?.focus?.();
+    };
   }, [onClose]);
 
   return (
