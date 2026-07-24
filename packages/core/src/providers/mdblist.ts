@@ -1,3 +1,4 @@
+import { describeProviderError } from './errors.js';
 import { HttpClient, HttpError } from './http.js';
 import {
   emptyPushResult,
@@ -7,6 +8,11 @@ import {
   type PushResult,
   type WatchEvent,
 } from './types.js';
+
+/** A scrobble that failed for a reason worth passing back to the user. */
+interface ScrobbleFailure {
+  failed: string;
+}
 
 const MDBLIST_BASE = 'https://api.mdblist.com';
 /** MDBList caps `/sync/watched` at 1000 rows per page. */
@@ -121,7 +127,10 @@ export class MdblistClient {
       const ok = await this.scrobble('stop', event.ref, 100);
       if (ok === 'ok') result.added++;
       else if (ok === 'not_found') result.notFound++;
-      else result.failed++;
+      else {
+        result.failed++;
+        result.note ??= ok.failed;
+      }
     }
     return result;
   }
@@ -156,7 +165,10 @@ export class MdblistClient {
       const ok = await this.scrobble('pause', event.ref, event.progress);
       if (ok === 'ok') result.added++;
       else if (ok === 'not_found') result.notFound++;
-      else result.failed++;
+      else {
+        result.failed++;
+        result.note ??= ok.failed;
+      }
     }
     return result;
   }
@@ -168,7 +180,7 @@ export class MdblistClient {
     action: 'start' | 'pause' | 'stop',
     ref: MediaRef,
     progress: number,
-  ): Promise<'ok' | 'not_found' | 'failed'> {
+  ): Promise<'ok' | 'not_found' | ScrobbleFailure> {
     // A whole-show mark can't be expressed via scrobble (it's per episode).
     if (ref.kind === 'show') return 'not_found';
     const ids = this.scrobbleIds(ref);
@@ -184,8 +196,10 @@ export class MdblistClient {
       await this.http.post(`/scrobble/${action}`, body);
       return 'ok';
     } catch (err) {
+      // 404 means MDBList does not know the title, which is a miss rather than a
+      // fault; anything else keeps its reason so the run can explain itself.
       if (err instanceof HttpError && err.status === 404) return 'not_found';
-      return 'failed';
+      return { failed: describeProviderError('mdblist', err) };
     }
   }
 

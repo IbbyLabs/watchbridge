@@ -1,3 +1,4 @@
+import { describeProviderError } from './errors.js';
 import { HttpClient, HttpError } from './http.js';
 import {
   emptyPushResult,
@@ -119,8 +120,10 @@ export class PmdbClient {
         // ?dedupe=true reuses a matching play instead of inserting a duplicate.
         await this.http.post('/api/external/watched?dedupe=true', payload);
         result.added++;
-      } catch {
+      } catch (err) {
         result.failed++;
+        // Keep the first reason: a bare count gives the user nothing to act on.
+        result.note ??= describeProviderError('pmdb', err);
       }
     }
     return result;
@@ -171,12 +174,15 @@ export class PmdbClient {
         // PMDB ignores anything under 2%, which is a no-op rather than a problem.
         await this.http.post('/api/external/resume', payload);
         result.added++;
-      } catch {
+      } catch (err) {
         result.failed++;
+        result.note ??= describeProviderError('pmdb', err);
       }
     }
     if (autoCompleting > 0) {
-      result.note = `${autoCompleting} resume position${autoCompleting === 1 ? '' : 's'} past ${AUTO_COMPLETE_PERCENT}% were left alone, because PublicMetaDB would have recorded them as finished`;
+      const skipped = `${autoCompleting} resume position${autoCompleting === 1 ? '' : 's'} past ${AUTO_COMPLETE_PERCENT}% were left alone, because PublicMetaDB would have recorded them as finished`;
+      // Keep a failure reason alongside it rather than replacing it.
+      result.note = result.note ? `${skipped}. ${result.note}` : skipped;
     }
     return result;
   }

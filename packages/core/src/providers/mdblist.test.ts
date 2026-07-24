@@ -176,3 +176,32 @@ describe('MdblistClient.pushProgress', () => {
     expect(post.body).toMatchObject({ movie: { ids: { imdb: 'tt0137523' } }, progress: 37 });
   });
 });
+
+describe('a failed scrobble explains itself', () => {
+  it('carries the reason through to the push result', async () => {
+    routeFetch(() => ({ status: 423 }));
+    const res = await new MdblistClient('key').pushHistory([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null },
+    ]);
+    expect(res.failed).toBe(1);
+    expect(res.note).toMatch(/locked/i);
+  });
+
+  it('still treats an unknown title as a miss, not a fault', async () => {
+    routeFetch(() => ({ status: 404 }));
+    const res = await new MdblistClient('key').pushHistory([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null },
+    ]);
+    expect(res.notFound).toBe(1);
+    expect(res.failed).toBe(0);
+    expect(res.note).toBeUndefined();
+  });
+
+  it('keeps no api key in the reason it reports', async () => {
+    routeFetch(() => ({ status: 423 }));
+    const res = await new MdblistClient('super-secret-key').pushHistory([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null },
+    ]);
+    expect(res.note).not.toContain('super-secret-key');
+  });
+});
