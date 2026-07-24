@@ -106,3 +106,40 @@ describe('PmdbClient.pullHistory', () => {
     });
   });
 });
+
+describe('PmdbClient.pushProgress', () => {
+  const at = (progress: number, positionMs: number) => ({
+    ref: { kind: 'movie' as const, ids: { tmdb: 550 } },
+    progress,
+    positionMs,
+    runtimeMs: 8_340_000,
+  });
+
+  it('sends a mid-film resume position', async () => {
+    const calls = routeFetch(() => ({ body: { success: true } }));
+    const res = await new PmdbClient('pm-key').pushProgress([at(42, 3_502_800)]);
+
+    expect(res.added).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body).toMatchObject({ tmdb_id: 550, media_type: 'movie', position_ms: 3_502_800 });
+  });
+
+  it('does not send a position PublicMetaDB would turn into a finished play', async () => {
+    const calls = routeFetch(() => ({ body: { success: true } }));
+    const res = await new PmdbClient('pm-key').pushProgress([at(85, 7_089_000)]);
+
+    expect(calls).toHaveLength(0);
+    expect(res.added).toBe(0);
+    expect(res.skipped).toBe(1);
+    expect(res.note).toMatch(/recorded them as finished/);
+  });
+
+  it('keeps sending the rest of the batch', async () => {
+    const calls = routeFetch(() => ({ body: { success: true } }));
+    const res = await new PmdbClient('pm-key').pushProgress([at(95, 7_923_000), at(30, 2_502_000)]);
+
+    expect(calls).toHaveLength(1);
+    expect(res.added).toBe(1);
+    expect(res.skipped).toBe(1);
+  });
+});

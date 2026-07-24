@@ -11,6 +11,9 @@ import {
 
 const PMDB_BASE = 'https://publicmetadb.com';
 
+/** At or above this, PublicMetaDB marks the item finished and drops the resume row. */
+const AUTO_COMPLETE_PERCENT = 80;
+
 interface PmdbWatched {
   id: string;
   tmdb_id: number;
@@ -138,10 +141,20 @@ export class PmdbClient {
 
   async pushProgress(events: ProgressEvent[]): Promise<PushResult> {
     const result = emptyPushResult();
+    let autoCompleting = 0;
     for (const event of events) {
       const tmdb = await this.resolveTmdb(event.ref);
       if (!tmdb || event.positionMs === undefined || event.runtimeMs === undefined) {
         result.notFound++;
+        continue;
+      }
+      // PMDB turns a resume position at or above AUTO_COMPLETE_PERCENT into a
+      // finished play. A source that reports someone is 85% through a film has
+      // not said they finished it, so sending this would invent a watch. If they
+      // did finish it, the history sync carries it across with a real date.
+      if (event.progress >= AUTO_COMPLETE_PERCENT) {
+        result.skipped++;
+        autoCompleting++;
         continue;
       }
       const payload: Record<string, unknown> = {
@@ -155,12 +168,15 @@ export class PmdbClient {
         payload.episode = event.ref.number;
       }
       try {
-        // PMDB smart rules: <2% ignored, >=80% auto-completes the item.
+        // PMDB ignores anything under 2%, which is a no-op rather than a problem.
         await this.http.post('/api/external/resume', payload);
         result.added++;
       } catch {
         result.failed++;
       }
+    }
+    if (autoCompleting > 0) {
+      result.note = `${autoCompleting} resume position${autoCompleting === 1 ? '' : 's'} past ${AUTO_COMPLETE_PERCENT}% were left alone, because PublicMetaDB would have recorded them as finished`;
     }
     return result;
   }
