@@ -112,6 +112,16 @@ export class SyncRunner {
       sync.propagateWatchlistRemovals === true && sync.direction !== 'two_way';
     const key = (provider: string) => `${provider}:history`;
     const reports: SyncReport[] = [];
+    const forwardDelivered = await this.deliveries.load(sync.id, sync.target);
+    // What the correctness machinery actually had to work with this run. A guard
+    // reading an empty or missing input is indistinguishable from a guard that is
+    // simply not needed, and stays "disabled" without anyone noticing.
+    const guards = {
+      deliveryMemory: forwardDelivered.length,
+      cursor: cursors[key(sync.source)] ? 'saved' : 'none',
+      filters: filters ? 'applied' : 'none',
+      watchlistRemovals: propagateWatchlistRemovals ? 'on' : 'off',
+    };
     try {
       const forward = await runSync(source, target, {
         dataTypes,
@@ -120,7 +130,7 @@ export class SyncRunner {
         ratingsAuthority,
         propagateWatchlistRemovals,
         since: cursors[key(sync.source)] ?? null,
-        deliveredHistory: await this.deliveries.load(sync.id, sync.target),
+        deliveredHistory: forwardDelivered,
       });
       reports.push(forward);
       advanceCursor(cursors, key(sync.source), source, forward);
@@ -149,11 +159,11 @@ export class SyncRunner {
       // rather than a status code.
       const error = describeProviderError(sync.target as ProviderId, err);
       log.error({ syncId: sync.id, err }, 'Sync run failed');
-      return this.finish(sync, trigger, { status: 'error', reports, error }, startedAt);
+      return this.finish(sync, trigger, { status: 'error', reports, error }, startedAt, undefined, guards);
     }
 
     const failed = reports.some((r) => r.results.some((x) => x.failed > 0));
-    return this.finish(sync, trigger, { status: failed ? 'partial' : 'success', reports }, startedAt, cursors);
+    return this.finish(sync, trigger, { status: failed ? 'partial' : 'success', reports }, startedAt, cursors, guards);
   }
 
   private async finish(
@@ -162,6 +172,7 @@ export class SyncRunner {
     outcome: RunOutcome,
     startedAt: Date,
     cursors?: Record<string, string>,
+    guards?: Record<string, unknown>,
   ): Promise<RunOutcome> {
     if (trigger === 'preview') return outcome;
 
@@ -192,7 +203,7 @@ export class SyncRunner {
       })
       .where(eq(syncs.id, sync.id));
 
-    this.logRun(sync, trigger, outcome, now.getTime() - startedAt.getTime());
+    this.logRun(sync, trigger, outcome, now.getTime() - startedAt.getTime(), guards);
 
     const [run] = await this.db.orm.select().from(syncRuns).where(eq(syncRuns.id, id)).limit(1);
     return { ...outcome, run };
@@ -202,7 +213,13 @@ export class SyncRunner {
    * One structured line per run. Without it a working instance is silent, so
    * there is no way to tell from the outside whether syncs are running at all.
    */
-  private logRun(sync: Sync, trigger: Trigger, outcome: RunOutcome, durationMs: number): void {
+  private logRun(
+    sync: Sync,
+    trigger: Trigger,
+    outcome: RunOutcome,
+    durationMs: number,
+    guards?: Record<string, unknown>,
+  ): void {
     const fields = {
       syncId: sync.id,
       name: sync.name,
@@ -226,6 +243,7 @@ export class SyncRunner {
           ...(x.note ? { note: x.note } : {}),
         })),
       })),
+      ...(guards ? { guards } : {}),
       ...(outcome.error ? { error: outcome.error } : {}),
     };
 

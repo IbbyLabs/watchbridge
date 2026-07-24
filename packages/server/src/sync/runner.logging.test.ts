@@ -156,3 +156,39 @@ describe('a data type that throws does not sink the whole run', () => {
     await db.orm.update(syncs).set({ dataTypes: '["history"]', cursors: '{}' });
   });
 });
+
+describe('the run line records which guards were in effect', () => {
+  const sync = async () => (await db.orm.select().from(syncs))[0]!;
+
+  it('reports delivery memory, cursor, filters and removal state', async () => {
+    await db.orm.update(syncs).set({ filters: JSON.stringify({ movies: false }) });
+    await runner.execute(await sync(), 'scheduled');
+
+    const [line] = logged.filter((l) => l.msg === 'Sync run finished');
+    expect(line.fields.guards).toEqual({
+      deliveryMemory: 0,
+      cursor: 'none',
+      filters: 'applied',
+      watchlistRemovals: 'off',
+    });
+
+    await db.orm.update(syncs).set({ filters: null });
+  });
+
+  it('says so when no filter is set', async () => {
+    await runner.execute(await sync(), 'scheduled');
+    const [line] = logged.filter((l) => l.msg === 'Sync run finished');
+    expect((line.fields.guards as { filters: string }).filters).toBe('none');
+  });
+
+  it('omits them when the run never started, rather than reporting empty ones', async () => {
+    // Nothing was consulted, so saying "delivery memory: 0" here would read as
+    // "the memory was empty" instead of "it was never reached".
+    vi.mocked(connections.clientFor).mockImplementation(async () => null);
+    await runner.execute(await sync(), 'scheduled');
+
+    const [line] = logged.filter((l) => l.msg === 'Sync run finished');
+    expect(line.fields).not.toHaveProperty('guards');
+    expect(String(line.fields.error)).toContain('not connected');
+  });
+});
