@@ -625,6 +625,15 @@ tables above for context; this list is the authoritative record of what is done.
 | Run status no longer carried by colour alone; live regions on async results | `Syncs.tsx`, error banners |
 | Rate limiting on the remaining credential-guessing routes | `routes/auth.ts` |
 | Cursors and delivery memory keyed to the resolved remote account | `ConnectionStore.forgetProviderState` |
+| Field errors wired to their input (`aria-describedby`/`aria-invalid`) | `Field` context in `ui.tsx` |
+| Visible focus on nav and inline links; skip-to-content; 24px tap targets | `Layout.tsx`, `Footer.tsx` |
+| Modal traps Tab and returns focus to its opener | `Modal` in `ui.tsx` |
+| Per-route `document.title` | `RouteAnnouncer` in `App.tsx` |
+| Live regions on every async banner | auth, connections, settings, syncs |
+
+The accessibility section of this audit is now fully addressed apart from i18n, which the
+audit itself argues is not blocking. A Lighthouse navigation audit of the built sign-in page
+scores 100 on accessibility, and 25 contrast assertions guard the palette on every build.
 | Ratings sync (Trakt <-> Simkl) | `planRatingsSync`, provider `pull/pushRatings` |
 | Watchlist sync (Trakt <-> Simkl) | `planWatchlistSync`, provider `pull/push/removeWatchlist` |
 | Per-sync scope filters | `packages/core/src/sync/filters.ts` |
