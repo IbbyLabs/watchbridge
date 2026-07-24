@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { SecretBox, loadConfig, type AppConfig } from '@watchbridge/core';
 import type { FastifyInstance } from 'fastify';
 import { createDb, type Db } from '../db/client.js';
-import { connections } from '../db/schema.js';
+import { connections, deliveries, syncs } from '../db/schema.js';
 import type { Mailer } from '../mail/mailer.js';
 import { buildApp } from '../app.js';
 import { ConnectionService } from './service.js';
@@ -264,5 +264,82 @@ describe('a rejected token flags the connection for reconnection', () => {
     await expect(client.pullHistory()).rejects.toThrow();
 
     expect(await statusOf(conn.id)).toBe('active');
+  });
+});
+
+describe('reconnecting to a different account discards what was keyed to the old one', () => {
+  const connectPmdb = async (apiKey: string) => {
+    routeFetch((url) =>
+      url.includes('/api/external/watched') ? { status: 200, body: { items: [] } } : { status: 404 },
+    );
+    const res = await authed({ method: 'POST', url: '/api/connections/pmdb', payload: { apiKey } });
+    vi.restoreAllMocks();
+    expect(res.statusCode).toBe(201);
+    return (await db.orm.select().from(connections).where(eq(connections.provider, 'pmdb')))[0]!;
+  };
+
+  const seedSync = async (userId: string) => {
+    const id = `sync-${Math.random().toString(36).slice(2)}`;
+    await db.orm.insert(syncs).values({
+      id,
+      userId,
+      name: 'Trakt to PMDB',
+      source: 'trakt',
+      target: 'pmdb',
+      dataTypes: '["history"]',
+      cursors: JSON.stringify({ 'pmdb:history': 'CURSOR', 'trakt:history': 'KEEP-ME' }),
+    });
+    await db.orm.insert(deliveries).values({
+      id: `del-${id}`,
+      syncId: id,
+      userId,
+      target: 'pmdb',
+      itemKey: 'movie:tmdb:550',
+      ref: JSON.stringify({ kind: 'movie', ids: { tmdb: 550 } }),
+    });
+    return id;
+  };
+
+  const state = async (syncId: string) => {
+    const [row] = await db.orm.select().from(syncs).where(eq(syncs.id, syncId));
+    const dels = await db.orm.select().from(deliveries).where(eq(deliveries.syncId, syncId));
+    return { cursors: JSON.parse(row!.cursors) as Record<string, string>, deliveries: dels.length };
+  };
+
+  afterEach(async () => {
+    await db.orm.delete(deliveries);
+    await db.orm.delete(syncs);
+    await db.orm.delete(connections).where(eq(connections.provider, 'pmdb'));
+  });
+
+  it('records which account a key-based connection resolves to', async () => {
+    const conn = await connectPmdb('pm-account-one-1234567890');
+    expect(conn.remoteAccount).toBeTruthy();
+    // The fingerprint stands in for the key; the key itself is never stored plainly.
+    expect(conn.remoteAccount).not.toContain('pm-account-one');
+  });
+
+  it('clears that provider\'s cursors and delivery memory when the account changes', async () => {
+    const first = await connectPmdb('pm-account-one-1234567890');
+    const syncId = await seedSync(first.userId);
+
+    await connectPmdb('pm-account-two-0987654321');
+
+    const after = await state(syncId);
+    expect(after.cursors['pmdb:history']).toBeUndefined();
+    expect(after.deliveries).toBe(0);
+    // Another provider's cursor on the same sync is untouched.
+    expect(after.cursors['trakt:history']).toBe('KEEP-ME');
+  });
+
+  it('keeps everything when the same account reconnects', async () => {
+    const first = await connectPmdb('pm-account-one-1234567890');
+    const syncId = await seedSync(first.userId);
+
+    await connectPmdb('pm-account-one-1234567890');
+
+    const after = await state(syncId);
+    expect(after.cursors['pmdb:history']).toBe('CURSOR');
+    expect(after.deliveries).toBe(1);
   });
 });

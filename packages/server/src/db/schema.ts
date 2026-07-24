@@ -93,6 +93,11 @@ export const connections = pgTable(
     /** AES-256-GCM encrypted JSON credential blob (tokens or api key). */
     credentials: text('credentials').notNull(),
     status: text('status').notNull().default('active'), // active | reauth | error
+    /**
+     * Which remote account this connection resolves to. Reconnecting a provider
+     * to a different account has to invalidate anything keyed to the old one.
+     */
+    remoteAccount: text('remote_account'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     lastValidatedAt: timestamp('last_validated_at', { withTimezone: true }),

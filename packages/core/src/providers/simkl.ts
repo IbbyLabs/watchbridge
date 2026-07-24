@@ -207,6 +207,16 @@ export class SimklClient {
     }
   }
 
+  /** Display name and the stable numeric account id behind this token. */
+  async getSettings(): Promise<{ name?: string; accountId?: string }> {
+    const r = await this.http.post<{ user?: { name?: string }; account?: { id?: number | string } }>(
+      '/users/settings',
+      {},
+    );
+    const id = r?.account?.id;
+    return { name: r?.user?.name, accountId: id === undefined || id === null ? undefined : String(id) };
+  }
+
   // ── Reads ────────────────────────────────────────────────────────
 
   getActivities(): Promise<Record<string, unknown>> {

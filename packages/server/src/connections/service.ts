@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   HttpError,
   MdblistClient,
@@ -107,17 +107,12 @@ export class ConnectionService {
 
     if (entry.provider === 'trakt') {
       const tokens = await this.newTrakt().exchangeCode(code, uri);
-      let label = 'Trakt';
-      try {
-        const settings = await this.newTrakt(tokens).getSettings();
-        if (settings.username) label = settings.username;
-      } catch {
-        // keep default label
-      }
-      await this.store.upsert(currentUserId, 'trakt', label, { kind: 'trakt', ...tokens });
+      const who = await this.whoIsTrakt(tokens);
+      await this.store.upsert(currentUserId, 'trakt', who.label, { kind: 'trakt', ...tokens }, who.account);
     } else {
       const accessToken = await this.newSimkl().exchangeCode(code, uri);
-      await this.store.upsert(currentUserId, 'simkl', 'Simkl', { kind: 'simkl', accessToken });
+      const who = await this.whoIsSimkl(accessToken);
+      await this.store.upsert(currentUserId, 'simkl', who.label, { kind: 'simkl', accessToken }, who.account);
     }
     return entry.provider;
   }
@@ -133,19 +128,19 @@ export class ConnectionService {
     const res = await client.pollDeviceToken(deviceCode);
     if (typeof res === 'string') return res;
 
-    let label = 'Trakt';
-    try {
-      const settings = await this.newTrakt(res).getSettings();
-      if (settings.username) label = settings.username;
-    } catch {
-      // Non-fatal: keep the default label.
-    }
-    await this.store.upsert(userId, 'trakt', label, {
-      kind: 'trakt',
-      accessToken: res.accessToken,
-      refreshToken: res.refreshToken,
-      expiresAt: res.expiresAt,
-    });
+    const who = await this.whoIsTrakt(res);
+    await this.store.upsert(
+      userId,
+      'trakt',
+      who.label,
+      {
+        kind: 'trakt',
+        accessToken: res.accessToken,
+        refreshToken: res.refreshToken,
+        expiresAt: res.expiresAt,
+      },
+      who.account,
+    );
     return 'connected';
   }
 
@@ -158,7 +153,8 @@ export class ConnectionService {
   async pollSimklPin(userId: string, userCode: string): Promise<PollStatus> {
     const res = await this.newSimkl().pollPin(userCode);
     if (res === 'pending') return 'pending';
-    await this.store.upsert(userId, 'simkl', 'Simkl', { kind: 'simkl', accessToken: res });
+    const who = await this.whoIsSimkl(res);
+    await this.store.upsert(userId, 'simkl', who.label, { kind: 'simkl', accessToken: res }, who.account);
     return 'connected';
   }
 
@@ -167,7 +163,9 @@ export class ConnectionService {
   async connectPmdb(userId: string, apiKey: string): Promise<PublicConnection> {
     const ok = await new PmdbClient(apiKey).validate();
     if (!ok) throw new InvalidApiKey();
-    return this.store.upsert(userId, 'pmdb', 'PublicMetaDB', { kind: 'pmdb', apiKey });
+    // The key is the account for a key-based provider, so its fingerprint stands
+    // in for an account id. Only the hash is stored.
+    return this.store.upsert(userId, 'pmdb', 'PublicMetaDB', { kind: 'pmdb', apiKey }, fingerprint(apiKey));
   }
 
   // ── MDBList api key ───────────────────────────────────────────────
@@ -175,7 +173,7 @@ export class ConnectionService {
   async connectMdblist(userId: string, apiKey: string): Promise<PublicConnection> {
     const ok = await new MdblistClient(apiKey).validate();
     if (!ok) throw new InvalidApiKey();
-    return this.store.upsert(userId, 'mdblist', 'MDBList', { kind: 'mdblist', apiKey });
+    return this.store.upsert(userId, 'mdblist', 'MDBList', { kind: 'mdblist', apiKey }, fingerprint(apiKey));
   }
 
   // ── Connected clients (for the sync engine) ──────────────────────
@@ -252,6 +250,33 @@ export class ConnectionService {
     return this.pmdbFor(userId);
   }
 
+  /**
+   * Who a set of Trakt tokens belongs to. Failing to find out is not fatal —
+   * a null account just means a later reconnect cannot be compared against this
+   * one, which is no worse than before the identity was tracked at all.
+   */
+  private async whoIsTrakt(
+    tokens: { accessToken: string; refreshToken: string; expiresAt: number },
+  ): Promise<{ label: string; account: string | null }> {
+    try {
+      const settings = await this.newTrakt(tokens).getSettings();
+      return { label: settings.username ?? 'Trakt', account: settings.uuid ?? null };
+    } catch (err) {
+      log.warn({ provider: 'trakt', err }, 'Could not read the account behind this connection');
+      return { label: 'Trakt', account: null };
+    }
+  }
+
+  private async whoIsSimkl(accessToken: string): Promise<{ label: string; account: string | null }> {
+    try {
+      const settings = await this.newSimkl(accessToken).getSettings();
+      return { label: settings.name ?? 'Simkl', account: settings.accountId ?? null };
+    } catch (err) {
+      log.warn({ provider: 'simkl', err }, 'Could not read the account behind this connection');
+      return { label: 'Simkl', account: null };
+    }
+  }
+
   // ── factories ────────────────────────────────────────────────────
 
   private newTrakt(
@@ -282,6 +307,11 @@ export class ConnectionService {
       appVersion: this.config.APP_VERSION,
     });
   }
+}
+
+/** A stable, non-reversible stand-in for an API key. */
+function fingerprint(apiKey: string): string {
+  return createHash('sha256').update(apiKey).digest('hex').slice(0, 32);
 }
 
 export class InvalidApiKey extends Error {

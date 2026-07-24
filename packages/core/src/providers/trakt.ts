@@ -264,11 +264,17 @@ export class TraktClient {
     return this.authed((auth) => this.http.get('/sync/last_activities', { headers: auth }));
   }
 
-  async getSettings(): Promise<{ username?: string }> {
-    const r = await this.authed<{ user?: { username?: string } }>((auth) =>
+  /**
+   * `uuid` is Trakt's globally unique per-user identifier. Trakt documents it as
+   * the value to identify a user locally, and unlike the username it does not
+   * change, which is what makes it usable for spotting a reconnect to a
+   * different account.
+   */
+  async getSettings(): Promise<{ username?: string; uuid?: string }> {
+    const r = await this.authed<{ user?: { username?: string; ids?: { uuid?: string } } }>((auth) =>
       this.http.get('/users/settings', { headers: auth }),
     );
-    return { username: r.user?.username };
+    return { username: r.user?.username, uuid: r.user?.ids?.uuid };
   }
 
   async pullHistory(_since?: string | null): Promise<WatchEvent[]> {

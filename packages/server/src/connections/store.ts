@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import type { SecretBox } from '@watchbridge/core';
 import type { ProviderId } from '@watchbridge/core';
 import type { Db } from '../db/client.js';
-import { connections, type Connection } from '../db/schema.js';
+import { connections, deliveries, syncs, type Connection } from '../db/schema.js';
+import { createLogger } from '@watchbridge/core';
+
+const log = createLogger('connections');
 
 export interface TraktCreds {
   kind: 'trakt';
@@ -57,26 +60,41 @@ export class ConnectionStore {
     return rows.map(toPublic);
   }
 
-  /** Create or replace the user's connection for a provider. */
+  /**
+   * Create or replace the user's connection for a provider.
+   *
+   * `remoteAccount` identifies the account on the far side. When it changes, the
+   * connection now points somewhere else, and anything derived from the previous
+   * account is discarded in the same breath as the credential swap — a delta
+   * cursor from the old account would skip the new account's history, and its
+   * delivery memory would claim items were already pushed that never were.
+   */
   async upsert(
     userId: string,
     provider: ProviderId,
     label: string | null,
     creds: Credentials,
+    remoteAccount: string | null = null,
   ): Promise<PublicConnection> {
     const encrypted = this.box.encrypt(JSON.stringify(creds));
     const existing = await this.raw(userId, provider);
     if (existing) {
+      const switched =
+        remoteAccount !== null &&
+        existing.remoteAccount !== null &&
+        existing.remoteAccount !== remoteAccount;
       await this.db.orm
         .update(connections)
         .set({
           credentials: encrypted,
           label,
           status: 'active',
+          remoteAccount: remoteAccount ?? existing.remoteAccount,
           updatedAt: new Date(),
           lastValidatedAt: new Date(),
         })
         .where(eq(connections.id, existing.id));
+      if (switched) await this.forgetProviderState(userId, provider);
       return toPublic({ ...existing, label, status: 'active', credentials: encrypted });
     }
     const id = randomUUID();
@@ -88,9 +106,53 @@ export class ConnectionStore {
       label,
       credentials: encrypted,
       status: 'active',
+      remoteAccount,
       lastValidatedAt: now,
     });
     return { id, provider, label, status: 'active', createdAt: now, lastValidatedAt: now };
+  }
+
+  /**
+   * Drop everything this user's syncs remember about a provider: the delta
+   * cursors that say where to resume, and the record of what has already been
+   * delivered to it. Both are meaningless once the account behind it changes.
+   */
+  private async forgetProviderState(userId: string, provider: ProviderId): Promise<void> {
+    const rows = await this.db.orm
+      .select({ id: syncs.id, cursors: syncs.cursors })
+      .from(syncs)
+      .where(and(eq(syncs.userId, userId), or(eq(syncs.source, provider), eq(syncs.target, provider))));
+    if (rows.length === 0) return;
+
+    for (const row of rows) {
+      let cursors: Record<string, unknown>;
+      try {
+        cursors = JSON.parse(row.cursors) as Record<string, unknown>;
+      } catch {
+        cursors = {};
+      }
+      for (const key of Object.keys(cursors)) {
+        if (key.startsWith(`${provider}:`)) delete cursors[key];
+      }
+      await this.db.orm
+        .update(syncs)
+        .set({ cursors: JSON.stringify(cursors), updatedAt: new Date() })
+        .where(eq(syncs.id, row.id));
+    }
+
+    await this.db.orm.delete(deliveries).where(
+      and(
+        inArray(
+          deliveries.syncId,
+          rows.map((r) => r.id),
+        ),
+        eq(deliveries.target, provider),
+      ),
+    );
+    log.warn(
+      { userId, provider, syncs: rows.length },
+      'Provider reconnected to a different account; cleared its cursors and delivery memory',
+    );
   }
 
   private raw(userId: string, provider: ProviderId): Promise<Connection | undefined> {
