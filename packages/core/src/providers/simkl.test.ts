@@ -444,3 +444,38 @@ describe('SimklClient delta-pull reporting', () => {
     expect(client.lastPullSkipped).toBe(false);
   });
 });
+
+describe('a failed read is not an empty library', () => {
+  it('surfaces a history read failure instead of returning nothing', async () => {
+    // 403 rather than 500: a server error is retried with backoff, and the point
+    // here is the failure reaching the caller, not the retry policy.
+    routeFetch((url) =>
+      url.includes('/sync/activities') ? { body: { all: 'T1' } } : { status: 403, body: {} },
+    );
+    await expect(new SimklClient(cfg).pullHistory()).rejects.toThrow();
+  });
+
+  it('surfaces a progress read failure', async () => {
+    routeFetch(() => ({ status: 403, body: {} }));
+    await expect(new SimklClient(cfg).pullProgress()).rejects.toThrow();
+  });
+
+  it('surfaces a watchlist read failure', async () => {
+    routeFetch(() => ({ status: 403, body: {} }));
+    await expect(new SimklClient(cfg).pullWatchlist()).rejects.toThrow();
+  });
+
+  it('still tolerates an account with nothing in it', async () => {
+    routeFetch((url) => (url.includes('/sync/activities') ? { body: { all: 'T1' } } : { body: null }));
+    await expect(new SimklClient(cfg).pullHistory()).resolves.toEqual([]);
+  });
+
+  it('explains why a push failed rather than only counting it', async () => {
+    routeFetch(() => ({ status: 423, body: {} }));
+    const res = await new SimklClient(cfg).pushHistory([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null },
+    ]);
+    expect(res.failed).toBe(1);
+    expect(res.note).toMatch(/locked/i);
+  });
+});

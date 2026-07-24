@@ -1,4 +1,6 @@
 import { HttpClient, HttpError } from './http.js';
+import { createLogger } from '../logger.js';
+import { describeProviderError } from './errors.js';
 import { sharedRateGate, type RateGate } from './rateGate.js';
 import { sharesAnyId } from '../sync/identity.js';
 import {
@@ -15,6 +17,8 @@ import {
 } from './types.js';
 
 const SIMKL_BASE = 'https://api.simkl.com';
+
+const log = createLogger('simkl');
 
 interface SimklRatedMovie {
   user_rating?: number | null;
@@ -228,7 +232,10 @@ export class SimklClient {
     try {
       const a = await this.getActivities();
       return typeof a.all === 'string' ? a.all : undefined;
-    } catch {
+    } catch (err) {
+      // Not fatal — the pull falls back to its saved cursor — but a cursor that
+      // stops advancing because this keeps failing should not be invisible.
+      log.warn({ err }, 'Could not read the Simkl activity cursor');
       return undefined;
     }
   }
@@ -251,10 +258,13 @@ export class SimklClient {
     const delta = since ? `&date_from=${encodeURIComponent(since)}` : '';
     const out: WatchEvent[] = [];
 
-    const movies = await this.http
-      .get<{ movies?: SimklMovieItem[] }>(`/sync/all-items/movies/completed?extended=full${delta}`)
-      .catch(() => ({ movies: [] }));
-    for (const m of movies.movies ?? []) {
+    // Read failures are left to propagate. Swallowing one into an empty list
+    // makes a broken pull indistinguishable from an empty library, and the run
+    // then reports success having read nothing.
+    const movies = await this.http.get<{ movies?: SimklMovieItem[] } | null>(
+      `/sync/all-items/movies/completed?extended=full${delta}`,
+    );
+    for (const m of movies?.movies ?? []) {
       out.push({
         ref: { kind: 'movie', ids: toIds(m.movie.ids), title: m.movie.title, year: m.movie.year },
         watchedAt: m.last_watched_at ?? null,
@@ -269,12 +279,10 @@ export class SimklClient {
     // marks an unwatched episode. The whole-show branch is a fallback for any show
     // Simkl still declines to enumerate.
     for (const type of ['shows', 'anime'] as const) {
-      const res = await this.http
-        .get<Record<string, SimklShowItem[]>>(
-          `/sync/all-items/${type}?extended=full&include_all_episodes=yes&episode_watched_at=yes${delta}`,
-        )
-        .catch(() => ({}) as Record<string, SimklShowItem[]>);
-      const items = res[type] ?? res.shows ?? [];
+      const res = await this.http.get<Record<string, SimklShowItem[]> | null>(
+        `/sync/all-items/${type}?extended=full&include_all_episodes=yes&episode_watched_at=yes${delta}`,
+      );
+      const items = res?.[type] ?? res?.shows ?? [];
       for (const s of items) {
         const ids = toIds(s.show.ids);
         const enumerated = (s.seasons ?? []).some((se) => (se.episodes ?? []).length > 0);
@@ -298,9 +306,7 @@ export class SimklClient {
 
   /** Read resume positions from `/sync/playback` (a flat list of movies + episodes). */
   async pullProgress(): Promise<ProgressEvent[]> {
-    const items = await this.http
-      .get<SimklPlaybackItem[]>('/sync/playback')
-      .catch(() => [] as SimklPlaybackItem[]);
+    const items = await this.http.get<SimklPlaybackItem[] | null>('/sync/playback');
     const out: ProgressEvent[] = [];
     for (const it of items ?? []) {
       if (it.type === 'movie' && it.movie) {
@@ -342,7 +348,12 @@ export class SimklClient {
     const runtime = await this.http
       .get<{ runtime?: number | null }>(`/${endpoint}/${ids.simkl}?extended=full`)
       .then((r) => (typeof r.runtime === 'number' && r.runtime > 0 ? r.runtime : undefined))
-      .catch(() => undefined);
+      .catch((err: unknown) => {
+        // Optional enrichment: without it the item simply carries no millisecond
+        // position, which is better than guessing one.
+        log.debug({ endpoint, err }, 'No runtime available for this item');
+        return undefined;
+      });
     this.runtimeCache.set(key, runtime);
     return runtime;
   }
@@ -373,8 +384,11 @@ export class SimklClient {
       try {
         await this.http.post('/scrobble/pause', body);
         result.added++;
-      } catch {
+      } catch (err) {
         result.failed++;
+        // Keep the first reason: a whole batch usually fails for one cause, and a
+        // bare count tells the user nothing they can act on.
+        result.note ??= describeProviderError('simkl', err);
       }
     }
     return result;
@@ -445,8 +459,9 @@ export class SimklClient {
       result.notFoundRefs = rejected;
       result.notFound += rejected.length;
       result.added = sent - rejected.length;
-    } catch {
+    } catch (err) {
       result.failed = events.length;
+      result.note = describeProviderError('simkl', err);
     }
     return result;
   }
@@ -500,8 +515,9 @@ export class SimklClient {
       const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
       result.notFound += rejected;
       result.added = movies.length + shows.length - rejected;
-    } catch {
+    } catch (err) {
       result.failed = events.length;
+      result.note = describeProviderError('simkl', err);
     }
     return result;
   }
@@ -515,9 +531,9 @@ export class SimklClient {
   async pullWatchlist(): Promise<WatchlistEvent[]> {
     const out: WatchlistEvent[] = [];
     for (const status of WATCHLIST_STATUSES) {
-      const movies = await this.http
-        .get<{ movies?: SimklMovieItem[] }>(`/sync/all-items/movies/${status}`)
-        .catch(() => ({ movies: [] }));
+      const movies = await this.http.get<{ movies?: SimklMovieItem[] } | null>(
+        `/sync/all-items/movies/${status}`,
+      );
       for (const m of movies?.movies ?? []) {
         out.push({
           ref: { kind: 'movie', ids: toIds(m.movie.ids), title: m.movie.title, year: m.movie.year },
@@ -526,9 +542,9 @@ export class SimklClient {
       }
 
       for (const type of ['shows', 'anime'] as const) {
-        const res = await this.http
-          .get<Record<string, SimklShowItem[]>>(`/sync/all-items/${type}/${status}`)
-          .catch(() => ({}) as Record<string, SimklShowItem[]>);
+        const res = await this.http.get<Record<string, SimklShowItem[]> | null>(
+          `/sync/all-items/${type}/${status}`,
+        );
         for (const s of res?.[type] ?? res?.shows ?? []) {
           out.push({
             ref: { kind: 'show', ids: toIds(s.show.ids), title: s.show.title, year: s.show.year },
@@ -566,8 +582,9 @@ export class SimklClient {
       const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
       result.notFound += rejected;
       result.added = sent - rejected;
-    } catch {
+    } catch (err) {
       result.failed = sent;
+      result.note = describeProviderError('simkl', err);
     }
     return result;
   }
@@ -599,8 +616,9 @@ export class SimklClient {
       const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
       result.notFound += rejected;
       result.added = sent - rejected;
-    } catch {
+    } catch (err) {
       result.failed = sent;
+      result.note = describeProviderError('simkl', err);
     }
     return result;
   }

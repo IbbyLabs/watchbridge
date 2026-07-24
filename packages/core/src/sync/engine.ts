@@ -169,6 +169,7 @@ async function runHistory(
   if (source.lastPullSkipped === true) {
     report.note = `${source.id} reported no changes since the last run, so its history was not re-read`;
   }
+  report.note ??= shapeWarning(source.id, 'history', src.length, plan.unmatched.length);
   let deliveredNow: MediaRef[] = [];
   if (!preview && plan.toAdd.length > 0) {
     const res = await target.pushHistory(plan.toAdd);
@@ -211,6 +212,7 @@ async function runProgress(source: SyncSource, target: SyncTarget, preview: bool
     notFound: 0,
     failed: 0,
   };
+  report.note ??= shapeWarning(source.id, 'progress', src.length, plan.unmatched.length);
   if (!preview && plan.toAdd.length > 0) {
     const res = await target.pushProgress(plan.toAdd);
     applyPush(report, res);
@@ -246,6 +248,7 @@ async function runRatings(
     notFound: 0,
     failed: 0,
   };
+  report.note ??= shapeWarning(source.id, 'ratings', src.length, plan.unmatched.length);
   if (!preview && plan.toApply.length > 0) {
     const res = await target.pushRatings(plan.toApply);
     applyPush(report, res);
@@ -286,6 +289,7 @@ async function runWatchlist(
   if (propagateRemovals && !canRemove) {
     report.note = `${target.id} cannot remove watchlist items, so only additions were applied`;
   }
+  report.note ??= shapeWarning(source.id, 'watchlist', src.length, plan.unmatched.length);
 
   if (!preview && plan.toAdd.length > 0) {
     applyPush(report, await target.pushWatchlist(plan.toAdd));
@@ -298,6 +302,28 @@ async function runWatchlist(
     if (res.note) report.note = res.note;
   }
   return report;
+}
+
+/**
+ * Items come back but none of them carry a usable id.
+ *
+ * A provider renaming or re-nesting its id block reads exactly like this: the
+ * request succeeds, the rows are there, and every one of them is unusable. The
+ * sync then quietly plans nothing while looking healthy. A handful of genuinely
+ * id-less items is normal, so this only fires when the whole batch is unusable
+ * and the batch is big enough for that to mean something.
+ */
+const SHAPE_CANARY_MIN = 5;
+
+function shapeWarning(
+  provider: ProviderId,
+  dataType: DataType,
+  pulled: number,
+  unmatched: number,
+): string | undefined {
+  if (pulled < SHAPE_CANARY_MIN || unmatched !== pulled) return undefined;
+  log.warn({ provider, dataType, pulled }, 'Every item pulled lacked a usable id; the response shape may have changed');
+  return `${provider} returned ${pulled} ${dataType} items and none carried an id Watchbridge could use. Their API may have changed.`;
 }
 
 function applyPush(report: DataTypeReport, res: PushResult): void {

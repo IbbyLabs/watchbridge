@@ -429,3 +429,47 @@ describe('a skipped delta pull is distinguishable from a quiet one', () => {
     expect(report.results.find((r) => r.dataType === 'history')!.note).toBeUndefined();
   });
 });
+
+describe('a changed provider response shape is called out', () => {
+  const idless = (n: number): WatchEvent[] =>
+    Array.from({ length: n }, () => ({ ref: { kind: 'movie' as const, ids: {} }, watchedAt: null }));
+
+  it('warns when a whole batch comes back with no usable id', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = idless(8);
+    const target = new FakeProvider('simkl');
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    const history = report.results.find((r) => r.dataType === 'history')!;
+    expect(history.unmatched).toBe(8);
+    expect(history.note).toMatch(/none carried an id/);
+  });
+
+  it('stays quiet when only some items lack an id', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = [...idless(6), { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null }];
+    const target = new FakeProvider('simkl');
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    expect(report.results.find((r) => r.dataType === 'history')!.note).toBeUndefined();
+  });
+
+  it('stays quiet on a batch too small to mean anything', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = idless(3);
+    const target = new FakeProvider('simkl');
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    expect(report.results.find((r) => r.dataType === 'history')!.note).toBeUndefined();
+  });
+
+  it('does not mask a more specific note', async () => {
+    const source = new FakeProvider('simkl');
+    (source as { lastPullSkipped?: boolean }).lastPullSkipped = true;
+    source.history = idless(8);
+    const target = new FakeProvider('trakt');
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    expect(report.results.find((r) => r.dataType === 'history')!.note).toMatch(/no changes since/);
+  });
+});
