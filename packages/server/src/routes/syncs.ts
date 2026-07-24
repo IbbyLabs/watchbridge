@@ -101,6 +101,7 @@ function toPublic(s: Sync) {
     propagateWatchlistRemovals: s.propagateWatchlistRemovals,
     enabled: s.enabled,
     lastRunAt: s.lastRunAt,
+    lastRunStatus: s.lastRunStatus,
     createdAt: s.createdAt,
   };
 }

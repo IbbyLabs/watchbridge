@@ -130,6 +130,8 @@ export const syncs = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+    /** Status of the most recent non-preview run, so the list needs no per-row query. */
+    lastRunStatus: text('last_run_status'),
   },
   (t) => [index('syncs_user_idx').on(t.userId), index('syncs_enabled_idx').on(t.enabled)],
 );

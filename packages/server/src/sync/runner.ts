@@ -181,7 +181,12 @@ export class SyncRunner {
     });
     await this.db.orm
       .update(syncs)
-      .set({ lastRunAt: now, updatedAt: now, ...(cursors ? { cursors: JSON.stringify(cursors) } : {}) })
+      .set({
+        lastRunAt: now,
+        lastRunStatus: outcome.status,
+        updatedAt: now,
+        ...(cursors ? { cursors: JSON.stringify(cursors) } : {}),
+      })
       .where(eq(syncs.id, sync.id));
 
     this.logRun(sync, trigger, outcome, now.getTime() - startedAt.getTime());

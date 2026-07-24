@@ -57,6 +57,7 @@ export interface Sync {
   propagateWatchlistRemovals: boolean;
   enabled: boolean;
   lastRunAt: string | null;
+  lastRunStatus: 'success' | 'partial' | 'error' | null;
   createdAt: string;
 }
 

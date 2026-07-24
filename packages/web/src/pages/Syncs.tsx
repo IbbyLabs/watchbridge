@@ -170,6 +170,7 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
           <Pill tone="neutral">ratings from {PROVIDER_LABEL[sync.ratingsAuthority]}</Pill>
         )}
         {sync.propagateWatchlistRemovals && <Pill tone="neutral">watchlist removals on</Pill>}
+        <LastRunPill sync={sync} now={now} />
         <div className="ml-auto flex items-center gap-2">
           <Button variant="ghost" onClick={toggle}>
             {sync.enabled ? 'Enabled' : 'Paused'}
@@ -247,6 +248,29 @@ function OutcomeView({ outcome }: { outcome: RunOutcome }) {
       ))}
     </div>
   );
+}
+
+/**
+ * At-a-glance outcome of the last run. A sync that quietly stopped working is
+ * the failure mode users notice last, so it belongs on the card, not behind the
+ * run-history toggle.
+ */
+function LastRunPill({ sync, now }: { sync: Sync; now: number }) {
+  if (!sync.lastRunAt) return <Pill tone="neutral">Never run</Pill>;
+  const when = formatAgo(new Date(sync.lastRunAt).getTime(), now);
+  if (sync.lastRunStatus === 'error') return <Pill tone="danger">Failed {when}</Pill>;
+  if (sync.lastRunStatus === 'partial') return <Pill tone="danger">Partly failed {when}</Pill>;
+  return <Pill tone="success">Ran {when}</Pill>;
+}
+
+/** Coarse relative time. Precision past "hours" is noise on a sync list. */
+function formatAgo(at: number, now: number): string {
+  const mins = Math.round((now - at) / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
 }
 
 function RunStatus({ status }: { status: string }) {

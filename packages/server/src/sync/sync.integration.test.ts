@@ -221,3 +221,39 @@ describe('watchlist removal propagation', () => {
     expect(readded.json().propagateWatchlistRemovals).toBe(false);
   });
 });
+
+describe('last run status', () => {
+  it('is null before the first run and reflects the outcome after it', async () => {
+    const created = await authed({
+      method: 'POST',
+      url: '/api/syncs',
+      payload: { name: 'L', source: 'trakt', target: 'pmdb', dataTypes: ['history'] },
+    });
+    const id = created.json().id;
+    expect(created.json().lastRunStatus).toBeNull();
+
+    await authed({ method: 'POST', url: `/api/syncs/${id}/run` });
+
+    const list = (await authed({ method: 'GET', url: '/api/syncs' })).json() as Array<{
+      id: string;
+      lastRunStatus: string | null;
+    }>;
+    expect(list.find((s) => s.id === id)!.lastRunStatus).toBe('success');
+  });
+
+  it('is not touched by a preview', async () => {
+    const created = await authed({
+      method: 'POST',
+      url: '/api/syncs',
+      payload: { name: 'P', source: 'trakt', target: 'pmdb', dataTypes: ['history'] },
+    });
+    const id = created.json().id;
+    await authed({ method: 'POST', url: `/api/syncs/${id}/preview` });
+
+    const list = (await authed({ method: 'GET', url: '/api/syncs' })).json() as Array<{
+      id: string;
+      lastRunStatus: string | null;
+    }>;
+    expect(list.find((s) => s.id === id)!.lastRunStatus).toBeNull();
+  });
+});
