@@ -621,6 +621,10 @@ tables above for context; this list is the authoritative record of what is done.
 | Credentials redacted out of stored and logged errors | `redactUrl` in `providers/http.ts` |
 | Full account data export as JSON (#17) | `packages/server/src/routes/account.ts` |
 | A cursor-skipped pull is distinguishable from a quiet one (#18 partial) | `lastPullSkipped` |
+| WCAG AA contrast on every text token, checked by test | `packages/web/src/lib/contrast.test.ts` |
+| Run status no longer carried by colour alone; live regions on async results | `Syncs.tsx`, error banners |
+| Rate limiting on the remaining credential-guessing routes | `routes/auth.ts` |
+| Cursors and delivery memory keyed to the resolved remote account | `ConnectionStore.forgetProviderState` |
 | Ratings sync (Trakt <-> Simkl) | `planRatingsSync`, provider `pull/pushRatings` |
 | Watchlist sync (Trakt <-> Simkl) | `planWatchlistSync`, provider `pull/push/removeWatchlist` |
 | Per-sync scope filters | `packages/core/src/sync/filters.ts` |
