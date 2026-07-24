@@ -108,21 +108,30 @@ export async function runSync(
   const results: DataTypeReport[] = [];
   let deliveredHistory: MediaRef[] | undefined;
 
+  // Each data type is isolated. One provider erroring must not discard the work
+  // the earlier ones already wrote — in particular the history delivery memory,
+  // which the caller can only persist if this function returns.
   for (const dataType of options.dataTypes) {
-    if (dataType === 'history') {
-      const { report, delivered } = await runHistory(source, target, options.preview, options.since, options.deliveredHistory, options.filters);
-      results.push(report);
-      if (delivered.length > 0) deliveredHistory = delivered;
-    } else if (dataType === 'progress') {
-      results.push(await runProgress(source, target, options.preview, options.filters));
-    } else if (dataType === 'ratings') {
-      results.push(await runRatings(source, target, options.preview, options.ratingsAuthority, options.filters));
-    } else if (dataType === 'watchlist') {
-      results.push(
-        await runWatchlist(source, target, options.preview, options.propagateWatchlistRemovals === true, options.filters),
-      );
-    } else {
-      results.push(emptyReport(dataType, `${dataType} sync is not implemented yet`));
+    try {
+      if (dataType === 'history') {
+        const { report, delivered } = await runHistory(source, target, options.preview, options.since, options.deliveredHistory, options.filters);
+        results.push(report);
+        if (delivered.length > 0) deliveredHistory = delivered;
+      } else if (dataType === 'progress') {
+        results.push(await runProgress(source, target, options.preview, options.filters));
+      } else if (dataType === 'ratings') {
+        results.push(await runRatings(source, target, options.preview, options.ratingsAuthority, options.filters));
+      } else if (dataType === 'watchlist') {
+        results.push(
+          await runWatchlist(source, target, options.preview, options.propagateWatchlistRemovals === true, options.filters),
+        );
+      } else {
+        results.push(emptyReport(dataType, `${dataType} sync is not implemented yet`));
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      log.error({ source: source.id, target: target.id, dataType, err }, 'Data type failed mid-run');
+      results.push({ ...emptyReport(dataType, `${dataType} could not be synced: ${reason}`), failed: 1 });
     }
   }
 

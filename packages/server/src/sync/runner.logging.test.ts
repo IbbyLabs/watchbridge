@@ -125,3 +125,34 @@ describe('sync run logging', () => {
     expect(line.fields).toMatchObject({ status: 'partial' });
   });
 });
+
+describe('a data type that throws does not sink the whole run', () => {
+  const sync = async () => (await db.orm.select().from(syncs))[0]!;
+
+  it('records a partial run and leaves the delta cursor where it was', async () => {
+    await db.orm.update(syncs).set({ dataTypes: '["history","ratings"]' });
+    vi.mocked(connections.clientFor).mockImplementation(async (_u: string, p: string) => ({
+      ...stubClient(p),
+      capabilities: () => ({ history: true, progress: false, ratings: true, watchlist: false, datedHistory: true }),
+      lastActivityAll: 'T-NEW',
+      pullHistory: async () => {
+        throw new Error('Trakt timed out');
+      },
+      pullRatings: async () => [],
+      pushRatings: async () => ({ added: 0, skipped: 0, failed: 0, notFound: 0 }),
+    }));
+
+    const outcome = await runner.execute(await sync(), 'scheduled');
+
+    expect(outcome.status).toBe('partial');
+    const history = outcome.reports[0]!.results.find((r) => r.dataType === 'history')!;
+    expect(history.failed).toBe(1);
+    expect(history.note).toContain('Trakt timed out');
+    // Ratings still ran rather than being abandoned.
+    expect(outcome.reports[0]!.results.some((r) => r.dataType === 'ratings')).toBe(true);
+    // A failed history pull must not consume the delta window.
+    expect((await sync()).cursors).not.toContain('T-NEW');
+
+    await db.orm.update(syncs).set({ dataTypes: '["history"]', cursors: '{}' });
+  });
+});

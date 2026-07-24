@@ -372,3 +372,39 @@ describe('runSync watchlist', () => {
     expect(target.watchlist).toHaveLength(2);
   });
 });
+
+describe('runSync isolates a failing data type', () => {
+  it('keeps the history delivery memory when a later data type throws', async () => {
+    const source = new FakeProvider('trakt', true, true);
+    source.history = [{ ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null }];
+    source.pullRatings = async () => {
+      throw new Error('Simkl is down');
+    };
+    const target = new FakeProvider('simkl', true, true);
+
+    const report = await runSync(source, target, { dataTypes: ['history', 'ratings'], preview: false, now });
+
+    const history = report.results.find((r) => r.dataType === 'history')!;
+    expect(history.added).toBe(1);
+    expect(report.deliveredHistory).toHaveLength(1);
+
+    const ratings = report.results.find((r) => r.dataType === 'ratings')!;
+    expect(ratings.failed).toBe(1);
+    expect(ratings.note).toContain('Simkl is down');
+  });
+
+  it('still runs the data types after the one that threw', async () => {
+    const source = new FakeProvider('trakt', true, true, true);
+    source.watchlist = [{ ref: { kind: 'movie', ids: { tmdb: 550 } } }];
+    source.pullRatings = async () => {
+      throw new Error('rate limited');
+    };
+    const target = new FakeProvider('simkl', true, true, true);
+
+    const report = await runSync(source, target, { dataTypes: ['ratings', 'watchlist'], preview: false, now });
+
+    expect(report.results.map((r) => r.dataType)).toEqual(['ratings', 'watchlist']);
+    expect(report.results.find((r) => r.dataType === 'watchlist')!.added).toBe(1);
+    expect(target.watchlist).toHaveLength(1);
+  });
+});
