@@ -45,6 +45,24 @@ export interface SyncTarget extends SyncSource {
   removeWatchlist?(events: WatchlistEvent[]): Promise<PushResult>;
 }
 
+/** Enough of an item to recognise it in a run report, without the whole ref. */
+export interface ReportedItem {
+  kind: 'movie' | 'episode' | 'show';
+  title?: string;
+  year?: number;
+  season?: number;
+  number?: number;
+  /** Which external ids the item did carry, so a mismatch is diagnosable. */
+  ids: string[];
+}
+
+/**
+ * A run report is stored per run and returned to the browser, so item lists are
+ * capped. The counts are always exact; the lists are a sample to recognise what
+ * is being skipped, not a full ledger.
+ */
+export const MAX_REPORTED_ITEMS = 25;
+
 export interface DataTypeReport {
   dataType: DataType;
   planned: number;
@@ -56,6 +74,10 @@ export interface DataTypeReport {
   failed: number;
   /** Watchlist only, and only when removal propagation is switched on. */
   removed?: number;
+  /** A sample of the items with no usable id, so the user can see what is stuck. */
+  unmatchedItems?: ReportedItem[];
+  /** A sample of the items the target said it could not find. */
+  notFoundItems?: ReportedItem[];
   /** Set when the pair can't sync this data type (e.g. Simkl progress). */
   note?: string;
 }
@@ -169,6 +191,7 @@ async function runHistory(
   if (source.lastPullSkipped === true) {
     report.note = `${source.id} reported no changes since the last run, so its history was not re-read`;
   }
+  withUnmatched(report, plan.unmatched);
   report.note ??= shapeWarning(source.id, 'history', src.length, plan.unmatched.length);
   let deliveredNow: MediaRef[] = [];
   if (!preview && plan.toAdd.length > 0) {
@@ -212,6 +235,7 @@ async function runProgress(source: SyncSource, target: SyncTarget, preview: bool
     notFound: 0,
     failed: 0,
   };
+  withUnmatched(report, plan.unmatched);
   report.note ??= shapeWarning(source.id, 'progress', src.length, plan.unmatched.length);
   if (!preview && plan.toAdd.length > 0) {
     const res = await target.pushProgress(plan.toAdd);
@@ -248,6 +272,7 @@ async function runRatings(
     notFound: 0,
     failed: 0,
   };
+  withUnmatched(report, plan.unmatched);
   report.note ??= shapeWarning(source.id, 'ratings', src.length, plan.unmatched.length);
   if (!preview && plan.toApply.length > 0) {
     const res = await target.pushRatings(plan.toApply);
@@ -289,6 +314,7 @@ async function runWatchlist(
   if (propagateRemovals && !canRemove) {
     report.note = `${target.id} cannot remove watchlist items, so only additions were applied`;
   }
+  withUnmatched(report, plan.unmatched);
   report.note ??= shapeWarning(source.id, 'watchlist', src.length, plan.unmatched.length);
 
   if (!preview && plan.toAdd.length > 0) {
@@ -331,6 +357,25 @@ function applyPush(report: DataTypeReport, res: PushResult): void {
   report.notFound += res.notFound;
   report.failed += res.failed;
   if (res.note) report.note = res.note;
+  const rejected = describeItems(res.notFoundRefs ?? []);
+  if (rejected.length > 0) report.notFoundItems = rejected;
+}
+
+/** Trim a set of refs down to what is useful in a report. */
+function describeItems(refs: MediaRef[]): ReportedItem[] {
+  return refs.slice(0, MAX_REPORTED_ITEMS).map((ref) => ({
+    kind: ref.kind,
+    ...(ref.title !== undefined ? { title: ref.title } : {}),
+    ...(ref.year !== undefined ? { year: ref.year } : {}),
+    ...(ref.season !== undefined ? { season: ref.season } : {}),
+    ...(ref.number !== undefined ? { number: ref.number } : {}),
+    ids: Object.keys(ref.ids),
+  }));
+}
+
+/** Attach a sample of the unmatched items alongside their count. */
+function withUnmatched(report: DataTypeReport, unmatched: Array<{ ref: MediaRef }>): void {
+  if (unmatched.length > 0) report.unmatchedItems = describeItems(unmatched.map((e) => e.ref));
 }
 
 function emptyReport(dataType: DataType, note: string): DataTypeReport {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runSync, type SyncTarget } from './engine.js';
+import { runSync, MAX_REPORTED_ITEMS, type SyncTarget } from './engine.js';
 import { itemKey } from './identity.js';
 import {
   emptyPushResult,
@@ -471,5 +471,74 @@ describe('a changed provider response shape is called out', () => {
 
     const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
     expect(report.results.find((r) => r.dataType === 'history')!.note).toMatch(/no changes since/);
+  });
+});
+
+describe('run reports name the items that did not sync', () => {
+  it('lists the unmatched items alongside the count', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = [
+      { ref: { kind: 'movie', ids: {}, title: 'A Film With No Ids', year: 1999 }, watchedAt: null },
+      { ref: { kind: 'episode', ids: {}, season: 2, number: 5, title: 'Some Show' }, watchedAt: null },
+    ];
+    const target = new FakeProvider('simkl');
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    const history = report.results.find((r) => r.dataType === 'history')!;
+    expect(history.unmatched).toBe(2);
+    expect(history.unmatchedItems).toEqual([
+      { kind: 'movie', title: 'A Film With No Ids', year: 1999, ids: [] },
+      { kind: 'episode', title: 'Some Show', season: 2, number: 5, ids: [] },
+    ]);
+  });
+
+  it('records which ids an item did carry, so a mismatch is diagnosable', async () => {
+    const source = new FakeProvider('trakt');
+    // An episode with show ids but no episode number cannot be placed.
+    source.history = [{ ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1 }, watchedAt: null }];
+    const target = new FakeProvider('simkl');
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    expect(report.results[0]!.unmatchedItems![0]!.ids).toEqual(['tmdb']);
+  });
+
+  it('caps the list while keeping the count exact', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = Array.from({ length: 40 }, (_, i) => ({
+      ref: { kind: 'movie' as const, ids: {}, title: `Film ${i}` },
+      watchedAt: null,
+    }));
+    const target = new FakeProvider('simkl');
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    const history = report.results.find((r) => r.dataType === 'history')!;
+    expect(history.unmatched).toBe(40);
+    expect(history.unmatchedItems).toHaveLength(MAX_REPORTED_ITEMS);
+  });
+
+  it('lists what the target rejected', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = [{ ref: { kind: 'movie', ids: { tmdb: 550 }, title: 'Fight Club' }, watchedAt: null }];
+    const target = new FakeProvider('simkl');
+    target.pushHistory = async (events) => ({
+      ...emptyPushResult(),
+      notFound: events.length,
+      notFoundRefs: events.map((e) => e.ref),
+    });
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    const history = report.results.find((r) => r.dataType === 'history')!;
+    expect(history.notFoundItems).toEqual([{ kind: 'movie', title: 'Fight Club', ids: ['tmdb'] }]);
+  });
+
+  it('leaves the lists off entirely when everything synced', async () => {
+    const source = new FakeProvider('trakt');
+    source.history = [{ ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null }];
+    const target = new FakeProvider('simkl');
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    const history = report.results.find((r) => r.dataType === 'history')!;
+    expect(history.unmatchedItems).toBeUndefined();
+    expect(history.notFoundItems).toBeUndefined();
   });
 });

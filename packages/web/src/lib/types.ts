@@ -71,7 +71,18 @@ export interface DataTypeReport {
   notFound: number;
   failed: number;
   removed?: number;
+  unmatchedItems?: ReportedItem[];
+  notFoundItems?: ReportedItem[];
   note?: string;
+}
+
+export interface ReportedItem {
+  kind: 'movie' | 'episode' | 'show';
+  title?: string;
+  year?: number;
+  season?: number;
+  number?: number;
+  ids: string[];
 }
 
 export interface SyncReport {

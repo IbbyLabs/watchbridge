@@ -49,5 +49,7 @@ export {
   type SyncTarget,
   type SyncReport,
   type DataTypeReport,
+  type ReportedItem,
+  MAX_REPORTED_ITEMS,
   type RunSyncOptions,
 } from './sync/engine.js';

@@ -4,7 +4,9 @@ import {
   PROVIDER_LABEL,
   type Connection,
   type DataType,
+  type DataTypeReport,
   type ProviderId,
+  type ReportedItem,
   type RunOutcome,
   type Sync,
   type SyncFilters,
@@ -245,10 +247,72 @@ function OutcomeView({ outcome }: { outcome: RunOutcome }) {
               </Pill>
             ))}
           </div>
+          {rep.results.map((res) => (
+            <SkippedItems key={`${res.dataType}-detail`} result={res} />
+          ))}
         </div>
       ))}
     </div>
   );
+}
+
+/**
+ * Which items a run could not place, on request. The counts alone leave a user
+ * with no way to tell whether one stubborn title is stuck or their whole library
+ * is failing to match.
+ */
+function SkippedItems({ result }: { result: DataTypeReport }) {
+  const [open, setOpen] = useState(false);
+  const groups = [
+    { label: 'no usable id', items: result.unmatchedItems ?? [], total: result.unmatched },
+    { label: 'not found on the target', items: result.notFoundItems ?? [], total: result.notFound },
+  ].filter((g) => g.items.length > 0);
+  if (groups.length === 0) return null;
+
+  return (
+    <div className="mt-1.5">
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="inline-flex min-h-[24px] items-center rounded px-1 text-xs text-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+      >
+        {open ? 'Hide' : 'Show'} what {result.dataType} skipped
+      </button>
+      {open && (
+        <div className="mt-1 space-y-2">
+          {groups.map((g) => (
+            <div key={g.label}>
+              <p className="text-xs text-faint">
+                {g.total} with {g.label}
+                {g.total > g.items.length && ` (first ${g.items.length} shown)`}
+              </p>
+              <ul className="mt-0.5 space-y-0.5">
+                {g.items.map((item, i) => (
+                  <li key={i} className="text-xs text-muted">
+                    {describeItem(item)}
+                    <span className="text-faint">
+                      {' · '}
+                      {item.ids.length > 0 ? `ids: ${item.ids.join(', ')}` : 'no ids at all'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function describeItem(item: ReportedItem): string {
+  const name = item.title ?? `Untitled ${item.kind}`;
+  const year = item.year ? ` (${item.year})` : '';
+  if (item.kind === 'episode' && item.season !== undefined) {
+    const ep = item.number !== undefined ? `E${String(item.number).padStart(2, '0')}` : '';
+    return `${name} S${String(item.season).padStart(2, '0')}${ep}`;
+  }
+  return `${name}${year}`;
 }
 
 /**
