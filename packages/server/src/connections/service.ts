@@ -1,15 +1,19 @@
 import { randomBytes } from 'node:crypto';
 import {
+  HttpError,
   MdblistClient,
   PmdbClient,
   SimklClient,
   TraktClient,
+  createLogger,
   type AppConfig,
   type DeviceCode,
   type ProviderId,
   type SyncTarget,
 } from '@watchbridge/core';
 import type { ConnectionStore, PublicConnection } from './store.js';
+
+const log = createLogger('connections');
 
 export class ProviderNotConfigured extends Error {
   constructor(readonly provider: ProviderId) {
@@ -180,32 +184,64 @@ export class ConnectionService {
     const c = await this.store.getCreds(userId, 'trakt');
     if (!c || c.creds.kind !== 'trakt') return null;
     const connId = c.id;
-    return this.newTrakt(
-      {
-        accessToken: c.creds.accessToken,
-        refreshToken: c.creds.refreshToken,
-        expiresAt: c.creds.expiresAt,
-      },
-      (tokens) => this.store.updateCreds(connId, { kind: 'trakt', ...tokens }),
+    return this.watchCredentials(
+      this.newTrakt(
+        {
+          accessToken: c.creds.accessToken,
+          refreshToken: c.creds.refreshToken,
+          expiresAt: c.creds.expiresAt,
+        },
+        (tokens) => this.store.updateCreds(connId, { kind: 'trakt', ...tokens }),
+      ),
+      connId,
+      'trakt',
     );
   }
 
   async simklFor(userId: string): Promise<SimklClient | null> {
     const c = await this.store.getCreds(userId, 'simkl');
     if (!c || c.creds.kind !== 'simkl') return null;
-    return this.newSimkl(c.creds.accessToken);
+    return this.watchCredentials(this.newSimkl(c.creds.accessToken), c.id, 'simkl');
   }
 
   async pmdbFor(userId: string): Promise<PmdbClient | null> {
     const c = await this.store.getCreds(userId, 'pmdb');
     if (!c || c.creds.kind !== 'pmdb') return null;
-    return new PmdbClient(c.creds.apiKey);
+    return this.watchCredentials(new PmdbClient(c.creds.apiKey), c.id, 'pmdb');
   }
 
   async mdblistFor(userId: string): Promise<MdblistClient | null> {
     const c = await this.store.getCreds(userId, 'mdblist');
     if (!c || c.creds.kind !== 'mdblist') return null;
-    return new MdblistClient(c.creds.apiKey);
+    return this.watchCredentials(new MdblistClient(c.creds.apiKey), c.id, 'mdblist');
+  }
+
+  /**
+   * Flag a connection for reconnection the moment the provider rejects its
+   * credentials. A 401/403 survives no amount of retrying — Trakt already tries
+   * one forced refresh before the error escapes — so without this a revoked
+   * token leaves the connection reading "connected" while every run fails.
+   */
+  private watchCredentials<T extends object>(client: T, connectionId: string, provider: ProviderId): T {
+    return new Proxy(client, {
+      get: (target, prop, receiver) => {
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== 'function') return value;
+        return (...args: unknown[]) => {
+          const out = (value as (...a: unknown[]) => unknown).apply(target, args);
+          if (!(out instanceof Promise)) return out;
+          return out.catch((err: unknown) => {
+            if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
+              log.warn({ provider, connectionId, status: err.status }, 'Provider rejected the stored credentials');
+              void this.store
+                .setStatus(connectionId, 'reauth')
+                .catch((e) => log.error({ provider, connectionId, err: e }, 'Failed to flag the connection for reconnection'));
+            }
+            throw err;
+          });
+        };
+      },
+    });
   }
 
   /** A connected client for a provider, as the read/write port the engine uses. */

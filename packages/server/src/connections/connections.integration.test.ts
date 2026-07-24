@@ -1,11 +1,13 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { loadConfig, type AppConfig } from '@watchbridge/core';
+import { SecretBox, loadConfig, type AppConfig } from '@watchbridge/core';
 import type { FastifyInstance } from 'fastify';
 import { createDb, type Db } from '../db/client.js';
 import { connections } from '../db/schema.js';
 import type { Mailer } from '../mail/mailer.js';
 import { buildApp } from '../app.js';
+import { ConnectionService } from './service.js';
+import { ConnectionStore } from './store.js';
 
 const captured: { verifyUrl?: string } = {};
 const mailer: Mailer = {
@@ -212,5 +214,55 @@ describe('connections', () => {
     const pmdb = list.find((c) => c.provider === 'pmdb')!;
     const del = await authed({ method: 'DELETE', url: `/api/connections/${pmdb.id}` });
     expect(del.json()).toEqual({ status: 'removed' });
+  });
+});
+
+describe('a rejected token flags the connection for reconnection', () => {
+  // The service is rebuilt here rather than reached through the app, so the test
+  // exercises the same client the runner gets without needing a route for it.
+  const service = () =>
+    new ConnectionService(new ConnectionStore(db, SecretBox.fromEnv(config.APP_ENCRYPTION_KEY)), config);
+
+  const connect = async () => {
+    routeFetch((url) =>
+      url.includes('/api/external/watched') ? { status: 200, body: { items: [] } } : { status: 404 },
+    );
+    const res = await authed({
+      method: 'POST',
+      url: '/api/connections/pmdb',
+      payload: { apiKey: 'pm-testkey-0987654321' },
+    });
+    vi.restoreAllMocks();
+    const row = (await db.orm.select().from(connections).where(eq(connections.provider, 'pmdb')))[0]!;
+    expect(res.statusCode).toBe(201);
+    return row;
+  };
+
+  const statusOf = async (id: string) =>
+    (await db.orm.select().from(connections).where(eq(connections.id, id)))[0]!.status;
+
+  afterEach(async () => {
+    await db.orm.delete(connections).where(eq(connections.provider, 'pmdb'));
+  });
+
+  it('marks it for reconnection when the provider answers 401', async () => {
+    const conn = await connect();
+    expect(conn.status).toBe('active');
+
+    routeFetch(() => ({ status: 401 }));
+    const client = (await service().clientFor(conn.userId, 'pmdb'))!;
+    await expect(client.pullHistory()).rejects.toThrow();
+
+    expect(await statusOf(conn.id)).toBe('reauth');
+  });
+
+  it('leaves it connected when the provider errors for a non-auth reason', async () => {
+    const conn = await connect();
+
+    routeFetch(() => ({ status: 404 }));
+    const client = (await service().clientFor(conn.userId, 'pmdb'))!;
+    await expect(client.pullHistory()).rejects.toThrow();
+
+    expect(await statusOf(conn.id)).toBe('active');
   });
 });

@@ -98,25 +98,42 @@ export function Connections() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-ink">{PROVIDER_LABEL[provider]}</span>
-                    {conn && (
-                      <Pill tone="success">
-                        <IconCheck className="text-[11px]" /> {conn.label ?? 'Connected'}
-                      </Pill>
-                    )}
+                    {conn &&
+                      (conn.status === 'active' ? (
+                        <Pill tone="success">
+                          <IconCheck className="text-[11px]" /> {conn.label ?? 'Connected'}
+                        </Pill>
+                      ) : (
+                        <Pill tone="danger">Reconnect needed</Pill>
+                      ))}
                     {!configured && !isKeyProvider(provider) && (
                       <Pill tone="neutral">Not configured</Pill>
                     )}
                   </div>
-                  <p className="mt-0.5 truncate text-sm text-muted">{DESCRIPTIONS[provider]}</p>
+                  <p className="mt-0.5 truncate text-sm text-muted">
+                    {conn && conn.status !== 'active'
+                      ? `${PROVIDER_LABEL[provider]} is no longer accepting this sign-in. Syncs using it will keep failing until you connect again.`
+                      : DESCRIPTIONS[provider]}
+                  </p>
                 </div>
                 {conn ? (
-                  <Button
-                    variant="danger"
-                    onClick={() => disconnect(conn.id)}
-                    aria-label={`Disconnect ${PROVIDER_LABEL[provider]}`}
-                  >
-                    <IconTrash /> Disconnect
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {conn.status !== 'active' && !isKeyProvider(provider) && (
+                      <Button
+                        variant="secondary"
+                        onClick={() => (redirect ? connectRedirect(provider) : setLinking(provider))}
+                      >
+                        Reconnect
+                      </Button>
+                    )}
+                    <Button
+                      variant="danger"
+                      onClick={() => disconnect(conn.id)}
+                      aria-label={`Disconnect ${PROVIDER_LABEL[provider]}`}
+                    >
+                      <IconTrash /> Disconnect
+                    </Button>
+                  </div>
                 ) : !isKeyProvider(provider) && redirect ? (
                   <div className="flex flex-col items-end gap-1">
                     <Button variant="secondary" onClick={() => connectRedirect(provider)}>
