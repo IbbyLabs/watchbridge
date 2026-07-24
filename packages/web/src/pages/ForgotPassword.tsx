@@ -29,7 +29,7 @@ export function ForgotPassword() {
             If an account exists for {email || 'that address'}, a reset link is on its way. It expires in
             1 hour.
           </p>
-          <Link to="/login" className="block text-center text-sm font-medium text-brand hover:underline">
+          <Link to="/login" className="block text-center text-sm font-medium text-brand-ink hover:underline">
             Back to sign in
           </Link>
         </div>
@@ -51,7 +51,7 @@ export function ForgotPassword() {
           </form>
           <p className="mt-6 text-center text-sm text-muted">
             Remembered it?{' '}
-            <Link to="/login" className="font-medium text-brand hover:underline">
+            <Link to="/login" className="font-medium text-brand-ink hover:underline">
               Sign in
             </Link>
           </p>

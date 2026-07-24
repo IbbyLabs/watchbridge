@@ -35,7 +35,7 @@ export function Register() {
           <span>Click the link in that email to activate your account, then sign in.</span>
         </div>
         <p className="mt-6 text-center text-sm text-muted">
-          <Link to="/login" className="font-medium text-brand hover:underline">
+          <Link to="/login" className="font-medium text-brand-ink hover:underline">
             Back to sign in
           </Link>
         </p>
@@ -61,7 +61,7 @@ export function Register() {
       </form>
       <p className="mt-6 text-center text-sm text-muted">
         Already have an account?{' '}
-        <Link to="/login" className="font-medium text-brand hover:underline">
+        <Link to="/login" className="font-medium text-brand-ink hover:underline">
           Sign in
         </Link>
       </p>

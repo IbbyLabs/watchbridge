@@ -72,7 +72,7 @@ function ExportData() {
           connected, how your syncs are set up, and what every run did. Provider sign-ins are left
           out, so the file cannot be used to reach your Trakt or Simkl account.
         </p>
-        {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+        {error && <p role="alert" className="mt-3 text-sm text-danger">{error}</p>}
         <Button variant="secondary" className="mt-4" loading={busy} onClick={download}>
           Download my data
         </Button>

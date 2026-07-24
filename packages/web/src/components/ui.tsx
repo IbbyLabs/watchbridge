@@ -49,7 +49,7 @@ export function Field({
       <span className="mb-1.5 block text-sm font-medium text-ink">{label}</span>
       {children}
       {error ? (
-        <span className="mt-1 block text-xs text-danger">{error}</span>
+        <span role="alert" className="mt-1 block text-xs text-danger">{error}</span>
       ) : hint ? (
         <span className="mt-1 block text-xs text-faint">{hint}</span>
       ) : null}
@@ -80,7 +80,7 @@ const PILL: Record<Tone, string> = {
   success: 'bg-success/15 text-success',
   danger: 'bg-danger/15 text-danger',
   neutral: 'bg-elevated text-muted',
-  brand: 'bg-brand/15 text-brand',
+  brand: 'bg-brand/15 text-brand-ink',
 };
 
 export function Pill({ tone = 'neutral', children }: { tone?: Tone; children: ReactNode }) {

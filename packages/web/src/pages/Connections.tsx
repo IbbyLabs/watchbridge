@@ -74,7 +74,7 @@ export function Connections() {
         </div>
       )}
       {errorParam && (
-        <div className="mb-4 flex items-center justify-between rounded-lg bg-danger/15 px-3 py-2 text-sm text-danger">
+        <div role="alert" className="mb-4 flex items-center justify-between rounded-lg bg-danger/15 px-3 py-2 text-sm text-danger">
           <span>
             Couldn’t connect {PROVIDER_LABEL[errorParam as ProviderId] ?? errorParam}. Please try
             again.
@@ -297,7 +297,7 @@ function DeviceModal({
         </div>
       )}
       {status === 'error' && (
-        <p className="text-sm text-danger">Couldn’t link the account. Please try again.</p>
+        <p role="alert" className="text-sm text-danger">Couldn’t link the account. Please try again.</p>
       )}
       {state && status === 'waiting' && (
         <div className="space-y-4">
@@ -308,7 +308,7 @@ function DeviceModal({
                 href={state.url}
                 target="_blank"
                 rel="noreferrer"
-                className="font-medium text-brand hover:underline"
+                className="font-medium text-brand-ink hover:underline"
               >
                 {state.url.replace('https://', '')}
               </a>

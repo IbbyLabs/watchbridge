@@ -142,9 +142,9 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
         <span className="inline-flex items-center gap-1.5 text-sm text-muted">
           {PROVIDER_LABEL[sync.source]}
           {sync.direction === 'two_way' ? (
-            <IconArrows className="text-brand" />
+            <IconArrows className="text-brand-ink" />
           ) : (
-            <IconArrowRight className="text-brand" />
+            <IconArrowRight className="text-brand-ink" />
           )}
           {PROVIDER_LABEL[sync.target]}
         </span>
@@ -204,6 +204,7 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
               runs.map((r) => (
                 <div key={r.id} className="flex items-center gap-2 text-xs text-muted">
                   <RunStatus status={r.status} />
+                  <span className="font-medium">{RUN_STATUS_LABEL[r.status] ?? r.status}</span>
                   <span className="tnum">{new Date(r.startedAt).toLocaleString()}</span>
                   <span className="text-faint">· {r.trigger}</span>
                   {r.error && <span className="text-danger">· {r.error}</span>}
@@ -220,14 +221,14 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
 function OutcomeView({ outcome }: { outcome: RunOutcome }) {
   if (outcome.status === 'error') {
     return (
-      <p className="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
+      <p role="alert" className="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
         {outcome.error ?? 'Run failed'}
       </p>
     );
   }
   const preview = outcome.reports[0]?.preview;
   return (
-    <div className="mt-3 space-y-2 rounded-lg bg-elevated/60 px-3 py-2.5">
+    <div role="status" aria-live="polite" className="mt-3 space-y-2 rounded-lg bg-elevated/60 px-3 py-2.5">
       {outcome.reports.map((rep, i) => (
         <div key={i}>
           <p className="text-xs font-medium text-muted">
@@ -273,8 +274,16 @@ function formatAgo(at: number, now: number): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+const RUN_STATUS_LABEL: Record<string, string> = {
+  success: 'Succeeded',
+  partial: 'Partly failed',
+  error: 'Failed',
+};
+
 function RunStatus({ status }: { status: string }) {
   const tone = status === 'success' ? 'bg-success' : status === 'error' ? 'bg-danger' : 'bg-brand';
+  // Decorative: the outcome is spelled out in the text beside it, so colour is
+  // never the only thing carrying it.
   return <span className={`h-1.5 w-1.5 rounded-full ${tone}`} aria-hidden />;
 }
 
@@ -461,9 +470,9 @@ function CreateSyncModal({
           </div>
         </Field>
         {!syncMovies && !syncShows && (
-          <p className="text-sm text-danger">Turning off both movies and shows syncs nothing.</p>
+          <p role="alert" className="text-sm text-danger">Turning off both movies and shows syncs nothing.</p>
         )}
-        {error && <p className="text-sm text-danger">{error}</p>}
+        {error && <p role="alert" className="text-sm text-danger">{error}</p>}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel

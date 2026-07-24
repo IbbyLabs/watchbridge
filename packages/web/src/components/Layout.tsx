@@ -81,7 +81,7 @@ export function Layout({ children }: { children: ReactNode }) {
             to={to}
             className={({ isActive }) =>
               `flex flex-col items-center gap-1 py-2.5 text-[11px] font-medium transition-colors ${
-                isActive ? 'text-brand' : 'text-muted'
+                isActive ? 'text-brand-ink' : 'text-muted'
               }`
             }
           >

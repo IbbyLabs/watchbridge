@@ -17,12 +17,12 @@ export function ResetPassword() {
   if (!token) {
     return (
       <AuthShell title="Reset password" subtitle="This link is missing its token.">
-        <p className="rounded-lg bg-danger/15 px-3 py-2 text-sm text-danger">
+        <p role="alert" className="rounded-lg bg-danger/15 px-3 py-2 text-sm text-danger">
           Open the link from your reset email, or request a new one.
         </p>
         <Link
           to="/forgot-password"
-          className="mt-4 block text-center text-sm font-medium text-brand hover:underline"
+          className="mt-4 block text-center text-sm font-medium text-brand-ink hover:underline"
         >
           Request a new link
         </Link>
