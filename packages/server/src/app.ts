@@ -20,6 +20,7 @@ import { registerRealIp } from './plugins/realIp.js';
 import { registerAuth } from './plugins/auth.js';
 import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
+import { accountRoutes } from './routes/account.js';
 import './types.js';
 
 export interface AppDeps {
@@ -67,6 +68,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const limiter = new RateLimiter();
   healthRoutes(app, db, config);
   authRoutes(app, auth, limiter, config);
+  accountRoutes(app, db);
   connectionRoutes(app, connectionService, connectionStore, config);
   syncRoutes(app, db, scheduler, config);
 

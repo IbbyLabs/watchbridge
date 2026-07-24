@@ -29,12 +29,55 @@ export function Settings() {
 
       <ChangePassword />
 
+      <ExportData />
+
       <div className="mt-8">
         <Button variant="secondary" onClick={logout}>
           <IconLogout /> Sign out
         </Button>
       </div>
     </div>
+  );
+}
+
+function ExportData() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const download = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/account/export', { credentials: 'include' });
+      if (!res.ok) throw new Error('failed');
+      const url = URL.createObjectURL(await res.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `watchbridge-export-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError('Could not build the export. Try again in a moment.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-8">
+      <h2 className="mb-3 text-sm font-semibold text-ink">Your data</h2>
+      <Card className="p-5">
+        <p className="text-sm text-muted">
+          Download everything Watchbridge holds for you as one JSON file: your account, what is
+          connected, how your syncs are set up, and what every run did. Provider sign-ins are left
+          out, so the file cannot be used to reach your Trakt or Simkl account.
+        </p>
+        {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+        <Button variant="secondary" className="mt-4" loading={busy} onClick={download}>
+          Download my data
+        </Button>
+      </Card>
+    </section>
   );
 }
 
