@@ -30,6 +30,8 @@ export interface SyncSource {
   pullWatchlist?(): Promise<WatchlistEvent[]>;
   /** A newer delta cursor after a pull, if the provider tracks one (Simkl). */
   readonly lastActivityAll?: string;
+  /** Set by providers that skip a pull when their cursor says nothing changed. */
+  readonly lastPullSkipped?: boolean;
 }
 
 /** A provider we can read from and write to. */
@@ -163,6 +165,10 @@ async function runHistory(
     notFound: 0,
     failed: 0,
   };
+  // An empty plan means something different when the source never looked.
+  if (source.lastPullSkipped === true) {
+    report.note = `${source.id} reported no changes since the last run, so its history was not re-read`;
+  }
   let deliveredNow: MediaRef[] = [];
   if (!preview && plan.toAdd.length > 0) {
     const res = await target.pushHistory(plan.toAdd);

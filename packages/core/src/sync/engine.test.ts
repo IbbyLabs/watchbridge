@@ -408,3 +408,24 @@ describe('runSync isolates a failing data type', () => {
     expect(target.watchlist).toHaveLength(1);
   });
 });
+
+describe('a skipped delta pull is distinguishable from a quiet one', () => {
+  it('says so when the source declined to re-read', async () => {
+    const source = new FakeProvider('simkl');
+    (source as { lastPullSkipped?: boolean }).lastPullSkipped = true;
+    const target = new FakeProvider('trakt');
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    const history = report.results.find((r) => r.dataType === 'history')!;
+    expect(history.planned).toBe(0);
+    expect(history.note).toMatch(/no changes since the last run/);
+  });
+
+  it('stays quiet when the source genuinely had nothing new', async () => {
+    const source = new FakeProvider('trakt');
+    const target = new FakeProvider('simkl');
+
+    const report = await runSync(source, target, { dataTypes: ['history'], preview: false, now });
+    expect(report.results.find((r) => r.dataType === 'history')!.note).toBeUndefined();
+  });
+});

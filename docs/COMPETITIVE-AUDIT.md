@@ -617,6 +617,10 @@ tables above for context; this list is the authoritative record of what is done.
 | One shared pace per upstream, not one per client (#11) | `packages/core/src/providers/rateGate.ts` |
 | Preview goes through the concurrency gate and single-flight lock | `SyncScheduler.previewNow` |
 | PMDB resume positions never become invented plays (#9 partial, #10) | `PmdbClient.pushProgress` |
+| Provider failures explained in words, not status codes (#13, #29) | `packages/core/src/providers/errors.ts` |
+| Credentials redacted out of stored and logged errors | `redactUrl` in `providers/http.ts` |
+| Full account data export as JSON (#17) | `packages/server/src/routes/account.ts` |
+| A cursor-skipped pull is distinguishable from a quiet one (#18 partial) | `lastPullSkipped` |
 | Ratings sync (Trakt <-> Simkl) | `planRatingsSync`, provider `pull/pushRatings` |
 | Watchlist sync (Trakt <-> Simkl) | `planWatchlistSync`, provider `pull/push/removeWatchlist` |
 | Per-sync scope filters | `packages/core/src/sync/filters.ts` |
@@ -632,6 +636,13 @@ Two items were already fixed before the audit and are listed in it in error:
 - **#3 Re-run never inflates the target.** Covered by `regressions.test.ts`.
 
 Still open and worth noting:
+
+- **#18's other half: periodic full reconciliation.** A skipped pull is now visible in the run
+  report, so a stuck cursor can be seen. Deciding how often to ignore the cursor and re-read
+  everything anyway is a behaviour choice and has not been made.
+- **Rows written to `sync_runs.error` before the redaction fix** may still contain an MDBList
+  API key, because that provider authenticates by query parameter and the old error message
+  embedded the full URL. New rows are safe; old ones have not been touched.
 
 - **#9 `/scrobble/pause` on a cold item.** Trakt's contract documents `/scrobble/stop` as
   scrobbling a play above 80% and saving a resume position between 1% and 79%; `/scrobble/pause`

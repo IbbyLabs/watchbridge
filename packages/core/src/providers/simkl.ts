@@ -110,6 +110,13 @@ export class SimklClient {
   /** Latest `/sync/activities` "all" timestamp seen during a pull (delta cursor). */
   lastActivityAll?: string;
 
+  /**
+   * True when the last history pull was skipped because Simkl reported nothing
+   * had changed. Without this, an empty result reads the same as "no new items",
+   * so a cursor that has stopped moving would look like a healthy quiet sync.
+   */
+  lastPullSkipped = false;
+
   constructor(private readonly cfg: SimklConfig) {
     this.http = new HttpClient({
       baseUrl: SIMKL_BASE,
@@ -225,7 +232,11 @@ export class SimklClient {
   async pullHistory(since?: string | null): Promise<WatchEvent[]> {
     const ts = await this.currentActivity();
     if (ts) this.lastActivityAll = ts;
-    if (since && ts && since === ts) return []; // unchanged — don't hit the library
+    this.lastPullSkipped = false;
+    if (since && ts && since === ts) {
+      this.lastPullSkipped = true;
+      return []; // unchanged — don't hit the library
+    }
 
     const delta = since ? `&date_from=${encodeURIComponent(since)}` : '';
     const out: WatchEvent[] = [];

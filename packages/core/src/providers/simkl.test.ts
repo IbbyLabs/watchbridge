@@ -425,3 +425,22 @@ describe('SimklClient watchlist', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe('SimklClient delta-pull reporting', () => {
+  const activities = { all: 'T9' };
+
+  it('flags the pull as skipped when the cursor has not moved', async () => {
+    routeFetch((url) => (url.includes('/sync/activities') ? { body: activities } : { body: {} }));
+    const client = new SimklClient(cfg);
+    const out = await client.pullHistory('T9');
+    expect(out).toEqual([]);
+    expect(client.lastPullSkipped).toBe(true);
+  });
+
+  it('does not flag a pull that actually ran', async () => {
+    routeFetch((url) => (url.includes('/sync/activities') ? { body: activities } : { body: {} }));
+    const client = new SimklClient(cfg);
+    await client.pullHistory('T8');
+    expect(client.lastPullSkipped).toBe(false);
+  });
+});
