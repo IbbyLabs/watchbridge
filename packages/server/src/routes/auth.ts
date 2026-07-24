@@ -47,7 +47,13 @@ export function authRoutes(
 ): void {
   app.post(
     '/api/auth/register',
-    { preHandler: limiter.middleware({ name: 'register', max: config.SIGNUP_RATE_PER_HOUR, windowMs: 3_600_000 }) },
+    {
+      preHandler: limiter.middleware({
+        name: 'register',
+        max: config.SIGNUP_RATE_PER_HOUR,
+        windowMs: 3_600_000,
+      }),
+    },
     async (request, reply) => {
       const parsed = registerBody.safeParse(request.body);
       if (!parsed.success) {
@@ -62,16 +68,25 @@ export function authRoutes(
     },
   );
 
-  app.get('/api/auth/verify', async (request, reply) => {
-    const token = z.string().min(1).safeParse((request.query as { token?: string }).token);
-    if (!token.success) return reply.redirect(`${config.APP_URL}/login?verified=0`);
-    try {
-      await auth.verifyEmail(token.data);
-      return reply.redirect(`${config.APP_URL}/login?verified=1`);
-    } catch {
-      return reply.redirect(`${config.APP_URL}/login?verified=0`);
-    }
-  });
+  app.get(
+    '/api/auth/verify',
+    // Verification tokens are long random values, but a link that can be probed
+    // without limit is still a free oracle.
+    { preHandler: limiter.middleware({ name: 'verify', max: 20, windowMs: 3_600_000 }) },
+    async (request, reply) => {
+      const token = z
+        .string()
+        .min(1)
+        .safeParse((request.query as { token?: string }).token);
+      if (!token.success) return reply.redirect(`${config.APP_URL}/login?verified=0`);
+      try {
+        await auth.verifyEmail(token.data);
+        return reply.redirect(`${config.APP_URL}/login?verified=1`);
+      } catch {
+        return reply.redirect(`${config.APP_URL}/login?verified=0`);
+      }
+    },
+  );
 
   app.post(
     '/api/auth/login',
@@ -106,23 +121,39 @@ export function authRoutes(
     return reply.send(publicUser(request.user!));
   });
 
-  app.post('/api/auth/password/change', { preHandler: requireAuth }, async (request, reply) => {
-    const parsed = changePasswordBody.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
-    }
-    try {
-      await auth.changePassword(
-        request.user!.id,
-        request.cookies[SESSION_COOKIE]!,
-        parsed.data.currentPassword,
-        parsed.data.newPassword,
-      );
-      return reply.send({ status: 'ok' });
-    } catch (err) {
-      return sendAuthError(reply, err);
-    }
-  });
+  app.post(
+    '/api/auth/password/change',
+    // Changing a password requires the current one, so an attacker holding a
+    // stolen session could otherwise guess it at will.
+    {
+      preHandler: [
+        requireAuth,
+        limiter.middleware({
+          name: 'password-change',
+          max: 10,
+          windowMs: 3_600_000,
+          keyBy: (req) => req.user?.id ?? req.clientIp,
+        }),
+      ],
+    },
+    async (request, reply) => {
+      const parsed = changePasswordBody.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
+      }
+      try {
+        await auth.changePassword(
+          request.user!.id,
+          request.cookies[SESSION_COOKIE]!,
+          parsed.data.currentPassword,
+          parsed.data.newPassword,
+        );
+        return reply.send({ status: 'ok' });
+      } catch (err) {
+        return sendAuthError(reply, err);
+      }
+    },
+  );
 
   app.post(
     '/api/auth/password/forgot',

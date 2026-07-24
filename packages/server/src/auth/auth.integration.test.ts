@@ -231,3 +231,38 @@ describe('password management', () => {
     expect(second.json().error).toBe('invalid_token');
   });
 });
+
+describe('rate limiting covers the credential-guessing routes', () => {
+  const spam = async (n: number, send: () => Promise<{ statusCode: number; json: () => unknown }>) => {
+    const codes: number[] = [];
+    for (let i = 0; i < n; i++) codes.push((await send()).statusCode);
+    return codes;
+  };
+
+  it('stops repeated login attempts and says how long to wait', async () => {
+    const codes = await spam(12, () =>
+      app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { identifier: 'nobody@example.com', password: 'wrongwrongwrong' },
+      }),
+    );
+    expect(codes).toContain(429);
+
+    const blocked = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { identifier: 'nobody@example.com', password: 'wrongwrongwrong' },
+    });
+    expect(blocked.statusCode).toBe(429);
+    expect(blocked.headers['retry-after']).toBeDefined();
+    expect((blocked.json() as { message: string }).message).toMatch(/Try again in \d+ (second|minute|hour)/);
+  });
+
+  it('stops repeated probing of a verification link', async () => {
+    const codes = await spam(22, () =>
+      app.inject({ method: 'GET', url: '/api/auth/verify?token=guess' }),
+    );
+    expect(codes).toContain(429);
+  });
+});

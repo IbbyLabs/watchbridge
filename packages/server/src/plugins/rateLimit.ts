@@ -15,6 +15,15 @@ export interface LimitOptions {
   keyBy?: (req: FastifyRequest) => string;
 }
 
+/** A wait in words, so the response reads as a sentence rather than a header value. */
+function describeWait(seconds: number): string {
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? '' : 's'}`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  const hours = Math.ceil(minutes / 60);
+  return `${hours} hour${hours === 1 ? '' : 's'}`;
+}
+
 /**
  * In-memory sliding-window rate limiter keyed by real client IP. Sufficient for
  * a single-process deployment; swap for a Redis-backed store when scaling out.
@@ -45,9 +54,12 @@ export class RateLimiter {
       bucket.hits = bucket.hits.filter((t) => now - t < opts.windowMs);
 
       if (bucket.hits.length >= opts.max) {
-        const retryAfter = Math.ceil((bucket.hits[0]! + opts.windowMs - now) / 1000);
-        reply.header('Retry-After', String(Math.max(1, retryAfter)));
-        return reply.code(429).send({ error: 'rate_limited', message: 'Too many requests' });
+        const retryAfter = Math.max(1, Math.ceil((bucket.hits[0]! + opts.windowMs - now) / 1000));
+        reply.header('Retry-After', String(retryAfter));
+        return reply.code(429).send({
+          error: 'rate_limited',
+          message: `Too many attempts. Try again in ${describeWait(retryAfter)}.`,
+        });
       }
 
       bucket.hits.push(now);
