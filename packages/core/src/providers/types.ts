@@ -82,6 +82,11 @@ export interface PushResult {
    * never retried.
    */
   notFoundRefs?: MediaRef[];
+  /**
+   * A human-readable explanation when the write could not be applied for a
+   * reason the user can act on (e.g. a full watchlist on a free account).
+   */
+  note?: string;
 }
 
 export const emptyPushResult = (): PushResult => ({ added: 0, skipped: 0, failed: 0, notFound: 0 });

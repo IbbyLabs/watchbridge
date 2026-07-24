@@ -171,4 +171,53 @@ describe('ratings sync validation', () => {
     expect(ok.statusCode).toBe(201);
     expect(ok.json().ratingsAuthority).toBe('trakt');
   });
-})
+});
+
+describe('watchlist removal propagation', () => {
+  const create = (payload: Record<string, unknown>) =>
+    authed({ method: 'POST', url: '/api/syncs', payload: { name: 'W', source: 'trakt', target: 'simkl', ...payload } });
+
+  it('defaults to off', async () => {
+    const res = await create({ dataTypes: ['watchlist'] });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().propagateWatchlistRemovals).toBe(false);
+  });
+
+  it('is stored when asked for on a watchlist sync', async () => {
+    const res = await create({ dataTypes: ['watchlist'], propagateWatchlistRemovals: true });
+    expect(res.json().propagateWatchlistRemovals).toBe(true);
+  });
+
+  it('is ignored on a sync that does not include the watchlist', async () => {
+    const res = await create({ dataTypes: ['history'], propagateWatchlistRemovals: true });
+    expect(res.json().propagateWatchlistRemovals).toBe(false);
+  });
+
+  it('refuses the combination with a two-way sync, and explains why', async () => {
+    const res = await create({ dataTypes: ['watchlist'], direction: 'two_way', propagateWatchlistRemovals: true });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toMatch(/two-way sync cannot propagate watchlist removals/);
+  });
+
+  it('refuses a patch that would turn an existing removal sync two-way', async () => {
+    const created = await create({ dataTypes: ['watchlist'], propagateWatchlistRemovals: true });
+    const res = await authed({
+      method: 'PATCH',
+      url: `/api/syncs/${created.json().id}`,
+      payload: { direction: 'two_way' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('turns itself off when the watchlist is dropped from the sync', async () => {
+    const created = await create({ dataTypes: ['watchlist'], propagateWatchlistRemovals: true });
+    const id = created.json().id;
+
+    const dropped = await authed({ method: 'PATCH', url: `/api/syncs/${id}`, payload: { dataTypes: ['history'] } });
+    expect(dropped.json().propagateWatchlistRemovals).toBe(false);
+
+    // Re-adding the watchlist must not bring the removal setting back with it.
+    const readded = await authed({ method: 'PATCH', url: `/api/syncs/${id}`, payload: { dataTypes: ['watchlist'] } });
+    expect(readded.json().propagateWatchlistRemovals).toBe(false);
+  });
+});

@@ -307,3 +307,61 @@ describe('Trakt ratings', () => {
     expect(res.added).toBe(1);
   });
 });
+
+describe('Trakt watchlist', () => {
+  const tokens = { accessToken: 'at', refreshToken: 'rt', expiresAt: future() };
+
+  it('reads movies and shows off the watchlist', async () => {
+    routeFetch((rec) => {
+      if (rec.url.includes('/sync/watchlist/movies')) {
+        return { body: [{ listed_at: '2026-01-01T00:00:00Z', movie: { title: 'Fight Club', year: 1999, ids: { tmdb: 550 } } }] };
+      }
+      if (rec.url.includes('/sync/watchlist/shows')) {
+        return { body: [{ listed_at: '2026-02-01T00:00:00Z', show: { title: 'Severance', ids: { tmdb: 95396 } } }] };
+      }
+      return { body: [] };
+    });
+
+    const items = await new TraktClient({ ...cfg, tokens }).pullWatchlist();
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ ref: { kind: 'movie', ids: { tmdb: 550 } }, listedAt: '2026-01-01T00:00:00Z' });
+    expect(items[1]!.ref.kind).toBe('show');
+  });
+
+  it('adds and removes through the two list endpoints with a media-ids body', async () => {
+    const calls = routeFetch(() => ({ body: { added: { movies: 1, shows: 0 }, not_found: { movies: [], shows: [] } } }));
+    const client = new TraktClient({ ...cfg, tokens });
+
+    const added = await client.pushWatchlist([{ ref: { kind: 'movie', ids: { tmdb: 550 } } }]);
+    expect(added.added).toBe(1);
+    const add = calls.find((c) => c.url.endsWith('/sync/watchlist'))!;
+    expect(add.method).toBe('POST');
+    expect(add.body).toEqual({ movies: [{ ids: { tmdb: 550 } }], shows: [] });
+
+    await client.removeWatchlist([{ ref: { kind: 'show', ids: { tmdb: 95396 } } }]);
+    const remove = calls.find((c) => c.url.endsWith('/sync/watchlist/remove'))!;
+    expect(remove.body).toEqual({ movies: [], shows: [{ ids: { tmdb: 95396 } }] });
+  });
+
+  it('counts what the target already had as skipped, not added', async () => {
+    routeFetch(() => ({ body: { added: { movies: 0 }, existing: { movies: 1 }, not_found: { movies: [] } } }));
+    const res = await new TraktClient({ ...cfg, tokens }).pushWatchlist([{ ref: { kind: 'movie', ids: { tmdb: 550 } } }]);
+    expect(res.added).toBe(0);
+    expect(res.skipped).toBe(1);
+  });
+
+  it('explains a full watchlist instead of failing silently', async () => {
+    routeFetch(() => ({ status: 420 }));
+    const res = await new TraktClient({ ...cfg, tokens }).pushWatchlist([{ ref: { kind: 'movie', ids: { tmdb: 550 } } }]);
+    expect(res.failed).toBe(1);
+    expect(res.added).toBe(0);
+    expect(res.note).toMatch(/watchlist is full/i);
+  });
+
+  it('does not send an item with no usable id', async () => {
+    const calls = routeFetch(() => ({ body: {} }));
+    const res = await new TraktClient({ ...cfg, tokens }).pushWatchlist([{ ref: { kind: 'movie', ids: {} } }]);
+    expect(res.notFound).toBe(1);
+    expect(calls).toHaveLength(0);
+  });
+});

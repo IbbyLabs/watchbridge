@@ -10,6 +10,7 @@ import {
   type PushResult,
   type RatingEvent,
   type WatchEvent,
+  type WatchlistEvent,
 } from './types.js';
 
 const SIMKL_BASE = 'https://api.simkl.com';
@@ -29,7 +30,7 @@ interface SimklRatingsResponse {
   shows?: SimklRatedShow[];
   anime?: SimklRatedShow[];
 }
-interface SimklRatingsWriteResponse {
+interface SimklWriteResponse {
   not_found?: { movies?: unknown[]; shows?: unknown[] };
 }
 
@@ -45,10 +46,13 @@ interface SimklIdBlock {
 
 interface SimklMovieItem {
   last_watched_at?: string;
+  added_to_watchlist_at?: string;
+  status?: string;
   movie: { title?: string; year?: number; ids: SimklIdBlock };
 }
 interface SimklShowItem {
   last_watched_at?: string;
+  added_to_watchlist_at?: string;
   status?: string; // watching | completed | hold | dropped | plantowatch
   watched_episodes_count?: number;
   total_episodes_count?: number;
@@ -465,7 +469,7 @@ export class SimklClient {
     if (movies.length === 0 && shows.length === 0) return result;
 
     try {
-      const res = await this.http.post<SimklRatingsWriteResponse>('/sync/ratings', { movies, shows });
+      const res = await this.http.post<SimklWriteResponse>('/sync/ratings', { movies, shows });
       const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
       result.notFound += rejected;
       result.added = movies.length + shows.length - rejected;
@@ -474,7 +478,109 @@ export class SimklClient {
     }
     return result;
   }
+
+  /**
+   * Read the watchlist. Simkl has no single watchlist: it is a set of status
+   * buckets, of which "plan to watch" and "on hold" are the ones a user thinks
+   * of as their watchlist. Each bucket is fetched on its own so the responses
+   * stay small — an unscoped `all-items` read returns the entire library.
+   */
+  async pullWatchlist(): Promise<WatchlistEvent[]> {
+    const out: WatchlistEvent[] = [];
+    for (const status of WATCHLIST_STATUSES) {
+      const movies = await this.http
+        .get<{ movies?: SimklMovieItem[] }>(`/sync/all-items/movies/${status}`)
+        .catch(() => ({ movies: [] }));
+      for (const m of movies?.movies ?? []) {
+        out.push({
+          ref: { kind: 'movie', ids: toIds(m.movie.ids), title: m.movie.title, year: m.movie.year },
+          listedAt: m.added_to_watchlist_at ?? null,
+        });
+      }
+
+      for (const type of ['shows', 'anime'] as const) {
+        const res = await this.http
+          .get<Record<string, SimklShowItem[]>>(`/sync/all-items/${type}/${status}`)
+          .catch(() => ({}) as Record<string, SimklShowItem[]>);
+        for (const s of res?.[type] ?? res?.shows ?? []) {
+          out.push({
+            ref: { kind: 'show', ids: toIds(s.show.ids), title: s.show.title, year: s.show.year },
+            listedAt: s.added_to_watchlist_at ?? null,
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Add to the watchlist. Everything lands in "plan to watch": it is the bucket
+   * a flat watchlist from another provider means, and "on hold" has no
+   * equivalent to carry over.
+   */
+  async pushWatchlist(events: WatchlistEvent[]): Promise<PushResult> {
+    const result = emptyPushResult();
+    const movies: Array<Record<string, unknown>> = [];
+    const shows: Array<Record<string, unknown>> = [];
+
+    for (const e of events) {
+      if ((e.ref.kind !== 'movie' && e.ref.kind !== 'show') || !hasId(e.ref.ids)) {
+        result.notFound++;
+        continue;
+      }
+      (e.ref.kind === 'movie' ? movies : shows).push({ to: 'plantowatch', ids: e.ref.ids });
+    }
+
+    const sent = movies.length + shows.length;
+    if (sent === 0) return result;
+
+    try {
+      const res = await this.http.post<SimklWriteResponse>('/sync/add-to-list', { movies, shows });
+      const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
+      result.notFound += rejected;
+      result.added = sent - rejected;
+    } catch {
+      result.failed = sent;
+    }
+    return result;
+  }
+
+  /**
+   * Remove from the watchlist. Simkl has no list-only removal: the one endpoint
+   * that takes an item off a list also drops it from watch history and clears
+   * its rating. That is why watchlist removal is opt-in per sync rather than
+   * something that happens by default.
+   */
+  async removeWatchlist(events: WatchlistEvent[]): Promise<PushResult> {
+    const result = emptyPushResult();
+    const movies: Array<Record<string, unknown>> = [];
+    const shows: Array<Record<string, unknown>> = [];
+
+    for (const e of events) {
+      if ((e.ref.kind !== 'movie' && e.ref.kind !== 'show') || !hasId(e.ref.ids)) {
+        result.notFound++;
+        continue;
+      }
+      (e.ref.kind === 'movie' ? movies : shows).push({ ids: e.ref.ids });
+    }
+
+    const sent = movies.length + shows.length;
+    if (sent === 0) return result;
+
+    try {
+      const res = await this.http.post<SimklWriteResponse>('/sync/history/remove', { movies, shows });
+      const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
+      result.notFound += rejected;
+      result.added = sent - rejected;
+    } catch {
+      result.failed = sent;
+    }
+    return result;
+  }
 }
+
+/** The Simkl status buckets that together make up a user's watchlist. */
+const WATCHLIST_STATUSES = ['plantowatch', 'hold'] as const;
 
 const hasId = (ids: ExternalIds): boolean =>
   Boolean(ids.imdb || ids.tmdb || ids.tvdb || ids.simkl || ids.mal || ids.anilist);

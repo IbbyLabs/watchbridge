@@ -1,0 +1,1 @@
+ALTER TABLE "syncs" ADD COLUMN "propagate_watchlist_removals" boolean DEFAULT false NOT NULL;

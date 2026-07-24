@@ -1,5 +1,5 @@
 export type ProviderId = 'trakt' | 'simkl' | 'pmdb' | 'mdblist';
-export type DataType = 'history' | 'progress' | 'ratings';
+export type DataType = 'history' | 'progress' | 'ratings' | 'watchlist';
 
 export interface User {
   id: string;
@@ -54,6 +54,7 @@ export interface Sync {
   intervalMinutes: number | null;
   filters: SyncFilters | null;
   ratingsAuthority: ProviderId | null;
+  propagateWatchlistRemovals: boolean;
   enabled: boolean;
   lastRunAt: string | null;
   createdAt: string;
@@ -68,6 +69,7 @@ export interface DataTypeReport {
   unmatched: number;
   notFound: number;
   failed: number;
+  removed?: number;
   note?: string;
 }
 

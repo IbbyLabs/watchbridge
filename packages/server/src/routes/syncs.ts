@@ -10,7 +10,7 @@ import { parseDataTypes, type SyncRunner } from '../sync/runner.js';
 import type { SyncScheduler } from '../sync/scheduler.js';
 
 const provider = z.enum(['trakt', 'simkl', 'pmdb', 'mdblist']);
-const dataType = z.enum(['history', 'progress', 'ratings']);
+const dataType = z.enum(['history', 'progress', 'ratings', 'watchlist']);
 
 const externalIds = z
   .object({
@@ -45,6 +45,7 @@ const createBody = z
     intervalMinutes: z.number().int().positive().nullable().optional(),
     filters: filters.nullable().optional(),
     ratingsAuthority: provider.nullable().optional(),
+    propagateWatchlistRemovals: z.boolean().optional(),
   })
   .refine((v) => v.source !== v.target, {
     message: 'source and target must differ',
@@ -53,6 +54,11 @@ const createBody = z
   .refine((v) => !v.dataTypes.includes('ratings') || v.ratingsAuthority === v.source || v.ratingsAuthority === v.target, {
     message: 'ratings syncs need a ratings authority of the source or target',
     path: ['ratingsAuthority'],
+  })
+  .refine((v) => v.direction !== 'two_way' || v.propagateWatchlistRemovals !== true, {
+    message:
+      'a two-way sync cannot propagate watchlist removals: an item just added on one side is indistinguishable from one removed on the other',
+    path: ['propagateWatchlistRemovals'],
   });
 
 const patchBody = z.object({
@@ -62,6 +68,7 @@ const patchBody = z.object({
   intervalMinutes: z.number().int().positive().nullable().optional(),
   filters: filters.nullable().optional(),
   ratingsAuthority: provider.nullable().optional(),
+  propagateWatchlistRemovals: z.boolean().optional(),
   enabled: z.boolean().optional(),
 });
 
@@ -91,6 +98,7 @@ function toPublic(s: Sync) {
     intervalMinutes: s.intervalMinutes,
     filters: parseFilters(s.filters),
     ratingsAuthority: s.ratingsAuthority,
+    propagateWatchlistRemovals: s.propagateWatchlistRemovals,
     enabled: s.enabled,
     lastRunAt: s.lastRunAt,
     createdAt: s.createdAt,
@@ -143,6 +151,8 @@ export function syncRoutes(
       intervalMinutes: clampInterval(data.intervalMinutes),
       filters: serializeFilters(data.filters),
       ratingsAuthority: data.dataTypes.includes('ratings') ? (data.ratingsAuthority ?? null) : null,
+      propagateWatchlistRemovals:
+        data.dataTypes.includes('watchlist') && data.propagateWatchlistRemovals === true,
     });
     const [row] = await db.orm.select().from(syncs).where(eq(syncs.id, id)).limit(1);
     return reply.code(201).send(toPublic(row!));
@@ -172,6 +182,21 @@ export function syncRoutes(
     }
     // Ratings authority only means anything for a ratings sync; clear it otherwise.
     const authorityValue = nextDataTypes.includes('ratings') ? (nextAuthority ?? null) : null;
+    // Same for removal propagation: dropping watchlist from a sync turns it back off,
+    // so re-adding watchlist later cannot silently resurrect a destructive setting.
+    const nextRemovals =
+      d.propagateWatchlistRemovals !== undefined
+        ? d.propagateWatchlistRemovals
+        : existing.propagateWatchlistRemovals;
+    const nextDirection = d.direction ?? existing.direction;
+    if (nextRemovals === true && nextDirection === 'two_way') {
+      return reply.code(400).send({
+        error: 'invalid_input',
+        message:
+          'a two-way sync cannot propagate watchlist removals: an item just added on one side is indistinguishable from one removed on the other',
+      });
+    }
+    const removalsValue = nextDataTypes.includes('watchlist') && nextRemovals === true;
 
     await db.orm
       .update(syncs)
@@ -185,6 +210,9 @@ export function syncRoutes(
         ...(d.filters !== undefined ? { filters: serializeFilters(d.filters) } : {}),
         ...(d.dataTypes !== undefined || d.ratingsAuthority !== undefined
           ? { ratingsAuthority: authorityValue }
+          : {}),
+        ...(d.dataTypes !== undefined || d.propagateWatchlistRemovals !== undefined
+          ? { propagateWatchlistRemovals: removalsValue }
           : {}),
         ...(d.enabled !== undefined ? { enabled: d.enabled } : {}),
         updatedAt: new Date(),

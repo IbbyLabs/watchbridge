@@ -8,6 +8,7 @@ import {
   type PushResult,
   type RatingEvent,
   type WatchEvent,
+  type WatchlistEvent,
 } from '../providers/types.js';
 
 /** An in-memory provider that actually stores what is pushed, for round-trips. */
@@ -15,10 +16,12 @@ class FakeProvider implements SyncTarget {
   history: WatchEvent[] = [];
   progress: ProgressEvent[] = [];
   ratings: RatingEvent[] = [];
+  watchlist: WatchlistEvent[] = [];
   constructor(
     readonly id: ProviderId,
     private readonly progressCapable = true,
     private readonly ratingsCapable = false,
+    private readonly watchlistCapable = false,
   ) {}
 
   capabilities() {
@@ -26,7 +29,7 @@ class FakeProvider implements SyncTarget {
       history: true,
       progress: this.progressCapable,
       ratings: this.ratingsCapable,
-      watchlist: false,
+      watchlist: this.watchlistCapable,
       datedHistory: true,
     };
   }
@@ -55,6 +58,18 @@ class FakeProvider implements SyncTarget {
       if (i >= 0) this.ratings[i] = e;
       else this.ratings.push(e);
     }
+    return { ...emptyPushResult(), added: events.length };
+  }
+  async pullWatchlist() {
+    return [...this.watchlist];
+  }
+  async pushWatchlist(events: WatchlistEvent[]): Promise<PushResult> {
+    this.watchlist.push(...events);
+    return { ...emptyPushResult(), added: events.length };
+  }
+  async removeWatchlist(events: WatchlistEvent[]): Promise<PushResult> {
+    const gone = new Set(events.map((e) => itemKey(e.ref)));
+    this.watchlist = this.watchlist.filter((e) => !gone.has(itemKey(e.ref)));
     return { ...emptyPushResult(), added: events.length };
   }
 }
@@ -255,5 +270,105 @@ describe('runSync ratings', () => {
 
     expect(second.results.find((x) => x.dataType === 'ratings')!.planned).toBe(0);
     expect(target.ratings).toHaveLength(1);
+  });
+});
+
+describe('runSync watchlist', () => {
+  const listed = (tmdb: number): WatchlistEvent => ({ ref: { kind: 'movie', ids: { tmdb } } });
+  const pair = () => [new FakeProvider('trakt', true, false, true), new FakeProvider('simkl', true, false, true)] as const;
+
+  it('notes unsupported when a side has no watchlist', async () => {
+    const source = new FakeProvider('trakt');
+    const target = new FakeProvider('pmdb');
+    const report = await runSync(source, target, { dataTypes: ['watchlist'], preview: false, now });
+    expect(report.results.find((x) => x.dataType === 'watchlist')!.note).toContain('does not expose a watchlist');
+  });
+
+  it('adds source items the target lacks, and is idempotent', async () => {
+    const [source, target] = pair();
+    source.watchlist = [listed(550), listed(680)];
+    target.watchlist = [listed(550)];
+
+    const first = await runSync(source, target, { dataTypes: ['watchlist'], preview: false, now });
+    const r = first.results.find((x) => x.dataType === 'watchlist')!;
+    expect(r.planned).toBe(1);
+    expect(r.added).toBe(1);
+    expect(target.watchlist).toHaveLength(2);
+
+    const second = await runSync(source, target, { dataTypes: ['watchlist'], preview: false, now });
+    expect(second.results.find((x) => x.dataType === 'watchlist')!.planned).toBe(0);
+  });
+
+  it('leaves extra target items alone unless removals are switched on', async () => {
+    const [source, target] = pair();
+    source.watchlist = [listed(550)];
+    target.watchlist = [listed(550), listed(680)];
+
+    await runSync(source, target, { dataTypes: ['watchlist'], preview: false, now });
+    expect(target.watchlist).toHaveLength(2);
+    expect(source.watchlist).toHaveLength(1);
+  });
+
+  it('removes target items the source dropped when removals are switched on', async () => {
+    const [source, target] = pair();
+    source.watchlist = [listed(550)];
+    target.watchlist = [listed(550), listed(680)];
+
+    const report = await runSync(source, target, {
+      dataTypes: ['watchlist'],
+      preview: false,
+      propagateWatchlistRemovals: true,
+      now,
+    });
+    const r = report.results.find((x) => x.dataType === 'watchlist')!;
+    expect(r.removed).toBe(1);
+    expect(target.watchlist.map((e) => e.ref.ids.tmdb)).toEqual([550]);
+  });
+
+  it('writes nothing in preview, including removals', async () => {
+    const [source, target] = pair();
+    source.watchlist = [listed(550)];
+    target.watchlist = [listed(680)];
+
+    const report = await runSync(source, target, {
+      dataTypes: ['watchlist'],
+      preview: true,
+      propagateWatchlistRemovals: true,
+      now,
+    });
+    expect(report.results.find((x) => x.dataType === 'watchlist')!.planned).toBe(2);
+    expect(target.watchlist.map((e) => e.ref.ids.tmdb)).toEqual([680]);
+  });
+
+  it('says so and keeps adding when the target cannot remove', async () => {
+    const [source, target] = pair();
+    source.watchlist = [listed(550)];
+    target.watchlist = [listed(680)];
+    (target as { removeWatchlist?: unknown }).removeWatchlist = undefined;
+
+    const report = await runSync(source, target, {
+      dataTypes: ['watchlist'],
+      preview: false,
+      propagateWatchlistRemovals: true,
+      now,
+    });
+    const r = report.results.find((x) => x.dataType === 'watchlist')!;
+    expect(r.note).toContain('cannot remove watchlist items');
+    expect(r.added).toBe(1);
+    expect(target.watchlist).toHaveLength(2);
+  });
+
+  it('never empties a target from a source that returned nothing', async () => {
+    const [source, target] = pair();
+    source.watchlist = [];
+    target.watchlist = [listed(550), listed(680)];
+
+    await runSync(source, target, {
+      dataTypes: ['watchlist'],
+      preview: false,
+      propagateWatchlistRemovals: true,
+      now,
+    });
+    expect(target.watchlist).toHaveLength(2);
   });
 });

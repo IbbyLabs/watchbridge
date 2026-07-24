@@ -28,7 +28,7 @@ export function parseDataTypes(raw: string): DataType[] {
   try {
     const arr = JSON.parse(raw) as unknown;
     if (Array.isArray(arr))
-      return arr.filter((x): x is DataType => x === 'history' || x === 'progress' || x === 'ratings');
+      return arr.filter((x): x is DataType => x === 'history' || x === 'progress' || x === 'ratings' || x === 'watchlist');
   } catch {
     // fall through
   }
@@ -105,6 +105,10 @@ export class SyncRunner {
     const cursors = parseCursors(sync.cursors);
     const filters = parseFilters(sync.filters);
     const ratingsAuthority = (sync.ratingsAuthority as ProviderId | null) ?? undefined;
+    // Never on a two-way sync: the forward pass would delete an item the user
+    // had just added on the other side, before the return pass could carry it over.
+    const propagateWatchlistRemovals =
+      sync.propagateWatchlistRemovals === true && sync.direction !== 'two_way';
     const key = (provider: string) => `${provider}:history`;
     const reports: SyncReport[] = [];
     try {
@@ -113,6 +117,7 @@ export class SyncRunner {
         preview,
         filters,
         ratingsAuthority,
+        propagateWatchlistRemovals,
         since: cursors[key(sync.source)] ?? null,
         deliveredHistory: await this.deliveries.load(sync.id, sync.target),
       });
@@ -128,6 +133,7 @@ export class SyncRunner {
           preview,
           filters,
           ratingsAuthority,
+          propagateWatchlistRemovals,
           since: cursors[key(sync.target)] ?? null,
           deliveredHistory: await this.deliveries.load(sync.id, sync.source),
         });
@@ -205,6 +211,7 @@ export class SyncRunner {
           dataType: x.dataType,
           planned: x.planned,
           added: x.added,
+          ...(x.removed !== undefined ? { removed: x.removed } : {}),
           skippedPresent: x.skippedPresent,
           notFound: x.notFound,
           failed: x.failed,

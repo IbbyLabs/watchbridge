@@ -34,6 +34,7 @@ const DATA_TYPES: { id: DataType; label: string }[] = [
   { id: 'history', label: 'Watch history' },
   { id: 'progress', label: 'Playback progress' },
   { id: 'ratings', label: 'Ratings' },
+  { id: 'watchlist', label: 'Watchlist' },
 ];
 
 export function Syncs() {
@@ -168,6 +169,7 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
         {sync.dataTypes.includes('ratings') && sync.ratingsAuthority && (
           <Pill tone="neutral">ratings from {PROVIDER_LABEL[sync.ratingsAuthority]}</Pill>
         )}
+        {sync.propagateWatchlistRemovals && <Pill tone="neutral">watchlist removals on</Pill>}
         <div className="ml-auto flex items-center gap-2">
           <Button variant="ghost" onClick={toggle}>
             {sync.enabled ? 'Enabled' : 'Paused'}
@@ -233,7 +235,8 @@ function OutcomeView({ outcome }: { outcome: RunOutcome }) {
           <div className="mt-1 flex flex-wrap gap-1.5">
             {rep.results.map((res) => (
               <Pill key={res.dataType} tone={res.added > 0 ? 'success' : 'neutral'}>
-                {res.dataType}: {preview ? `${res.planned} to add` : `+${res.added}`}
+                {res.dataType}: {preview ? `${res.planned} to apply` : `+${res.added}`}
+                {!preview && res.removed !== undefined && res.removed > 0 && ` · −${res.removed} removed`}
                 {res.skippedPresent > 0 && ` · ${res.skippedPresent} already there`}
                 {res.unmatched > 0 && ` · ${res.unmatched} unmatched`}
                 {res.note && ` · ${res.note}`}
@@ -270,10 +273,13 @@ function CreateSyncModal({
   const [syncShows, setSyncShows] = useState(true);
   const [syncSpecials, setSyncSpecials] = useState(true);
   const [ratingsAuthority, setRatingsAuthority] = useState<ProviderId | ''>('');
+  const [propagateRemovals, setPropagateRemovals] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const connectedIds = new Set(connections.map((c) => c.provider));
   const ratingsOn = types.includes('ratings');
+  // Two-way removals would delete an item just added on the other side.
+  const canPropagateRemovals = types.includes('watchlist') && direction === 'one_way';
 
   const toggleType = (t: DataType) =>
     setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -303,6 +309,7 @@ function CreateSyncModal({
         target,
         dataTypes: types,
         ratingsAuthority: ratingsOn ? ratingsAuthority : null,
+        propagateWatchlistRemovals: canPropagateRemovals && propagateRemovals,
         direction,
         intervalMinutes: interval ? Number(interval) : null,
         filters: buildFilters(),
@@ -378,6 +385,22 @@ function CreateSyncModal({
               <option value={source}>{PROVIDER_LABEL[source]} (source)</option>
               <option value={target}>{PROVIDER_LABEL[target]} (target)</option>
             </Select>
+          </Field>
+        )}
+        {canPropagateRemovals && (
+          <Field
+            label="Watchlist removals"
+            hint="Off, an item taken off one watchlist stays on the other. On, Simkl also drops it from your history and clears its rating, because Simkl has no list-only removal."
+          >
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={propagateRemovals}
+                onChange={(e) => setPropagateRemovals(e.target.checked)}
+                className="h-4 w-4 rounded border-border accent-brand"
+              />
+              Remove items from the target when the source drops them
+            </label>
           </Field>
         )}
         <div className="grid grid-cols-2 gap-3">

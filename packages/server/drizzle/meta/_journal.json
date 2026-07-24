@@ -57,6 +57,13 @@
       "when": 1784849605673,
       "tag": "0007_nervous_snowbird",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784889615906,
+      "tag": "0008_green_skullbuster",
+      "breakpoints": true
     }
   ]
 }

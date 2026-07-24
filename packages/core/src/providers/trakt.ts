@@ -9,6 +9,7 @@ import {
   type PushResult,
   type RatingEvent,
   type WatchEvent,
+  type WatchlistEvent,
 } from './types.js';
 
 /** Backstop on paging, so a misbehaving endpoint cannot spin indefinitely. */
@@ -67,6 +68,20 @@ interface TraktRatingShow {
   rated_at: string;
   rating: number;
   show: { title?: string; year?: number; ids: TraktIdBlock };
+}
+interface TraktWatchlistMovie {
+  listed_at: string;
+  movie: { title?: string; year?: number; ids: TraktIdBlock };
+}
+interface TraktWatchlistShow {
+  listed_at: string;
+  show: { title?: string; year?: number; ids: TraktIdBlock };
+}
+interface TraktListWriteResponse {
+  added?: { movies?: number; shows?: number };
+  deleted?: { movies?: number; shows?: number };
+  existing?: { movies?: number; shows?: number };
+  not_found?: { movies?: unknown[]; shows?: unknown[] };
 }
 
 export interface TraktConfig {
@@ -443,6 +458,76 @@ export class TraktClient {
     const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
     result.notFound += rejected;
     result.added = movies.length + shows.length - rejected;
+    return result;
+  }
+
+  async pullWatchlist(): Promise<WatchlistEvent[]> {
+    // Movies and shows only. A season or episode can sit on a Trakt watchlist,
+    // but neither maps onto a whole-title watchlist entry elsewhere.
+    const movies = await this.pageAll<TraktWatchlistMovie>('/sync/watchlist/movies');
+    const shows = await this.pageAll<TraktWatchlistShow>('/sync/watchlist/shows');
+    const out: WatchlistEvent[] = [];
+    for (const m of movies) {
+      out.push({
+        ref: { kind: 'movie', ids: toIds(m.movie.ids), title: m.movie.title, year: m.movie.year },
+        listedAt: m.listed_at ?? null,
+      });
+    }
+    for (const s of shows) {
+      out.push({
+        ref: { kind: 'show', ids: toIds(s.show.ids), title: s.show.title, year: s.show.year },
+        listedAt: s.listed_at ?? null,
+      });
+    }
+    return out;
+  }
+
+  async pushWatchlist(events: WatchlistEvent[]): Promise<PushResult> {
+    return this.writeWatchlist(events, '/sync/watchlist');
+  }
+
+  async removeWatchlist(events: WatchlistEvent[]): Promise<PushResult> {
+    return this.writeWatchlist(events, '/sync/watchlist/remove');
+  }
+
+  /** Add and remove take the same media-ids body and return the same envelope. */
+  private async writeWatchlist(events: WatchlistEvent[], path: string): Promise<PushResult> {
+    const result = emptyPushResult();
+    const movies: Array<Record<string, unknown>> = [];
+    const shows: Array<Record<string, unknown>> = [];
+
+    for (const e of events) {
+      if ((e.ref.kind !== 'movie' && e.ref.kind !== 'show') || !hasWritableId(e.ref.ids)) {
+        result.notFound++;
+        continue;
+      }
+      (e.ref.kind === 'movie' ? movies : shows).push({ ids: writableIds(e.ref.ids) });
+    }
+
+    const sent = movies.length + shows.length;
+    if (sent === 0) return result;
+
+    let res: TraktListWriteResponse;
+    try {
+      res = await this.authed<TraktListWriteResponse>((auth) =>
+        this.http.post(path, { movies, shows }, { headers: auth }),
+      );
+    } catch (err) {
+      // Trakt answers 420 when the account's watchlist is at its limit. Retrying
+      // cannot help, so report it as something the user has to resolve.
+      if (err instanceof HttpError && err.status === 420) {
+        result.failed = sent;
+        result.note = 'Trakt refused the additions because this account’s watchlist is full.';
+        return result;
+      }
+      throw err;
+    }
+
+    const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
+    const applied = res?.added ?? res?.deleted;
+    result.notFound += rejected;
+    result.added = applied ? (applied.movies ?? 0) + (applied.shows ?? 0) : sent - rejected;
+    result.skipped = (res?.existing?.movies ?? 0) + (res?.existing?.shows ?? 0);
     return result;
   }
 

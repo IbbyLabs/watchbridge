@@ -353,3 +353,64 @@ describe('Simkl ratings', () => {
     expect(calls.some((c) => c.method === 'POST' && c.url.includes('/sync/ratings'))).toBe(false);
   });
 });
+
+describe('SimklClient watchlist', () => {
+  it('reads plan-to-watch and on-hold across movies, shows and anime', async () => {
+    const calls = routeFetch((url) => {
+      if (url.includes('/all-items/movies/plantowatch')) {
+        return { body: { movies: [{ added_to_watchlist_at: '2026-01-01T00:00:00Z', movie: { title: 'Fight Club', ids: { tmdb: 550 } } }] } };
+      }
+      if (url.includes('/all-items/shows/hold')) {
+        return { body: { shows: [{ added_to_watchlist_at: '2026-02-01T00:00:00Z', show: { title: 'Severance', ids: { tmdb: 95396 } } }] } };
+      }
+      return { body: {} };
+    });
+
+    const items = await new SimklClient(cfg).pullWatchlist();
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ ref: { kind: 'movie', ids: { tmdb: 550 } }, listedAt: '2026-01-01T00:00:00Z' });
+    expect(items[1]).toMatchObject({ ref: { kind: 'show', ids: { tmdb: 95396 } } });
+
+    // Completed and dropped are library statuses, not watchlist ones.
+    const statuses = calls.map((c) => c.url);
+    expect(statuses.some((u) => u.includes('completed'))).toBe(false);
+    expect(statuses.some((u) => u.includes('dropped'))).toBe(false);
+  });
+
+  it('adds to plan-to-watch through add-to-list', async () => {
+    const calls = routeFetch(() => ({ body: { not_found: { movies: [], shows: [] } } }));
+    const res = await new SimklClient(cfg).pushWatchlist([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } } },
+      { ref: { kind: 'show', ids: { simkl: 42 } } },
+    ]);
+
+    expect(res.added).toBe(2);
+    const post = calls.find((c) => c.url.includes('/sync/add-to-list'))!;
+    expect(post.body).toEqual({
+      movies: [{ to: 'plantowatch', ids: { tmdb: 550 } }],
+      shows: [{ to: 'plantowatch', ids: { simkl: 42 } }],
+    });
+  });
+
+  it('counts items Simkl could not match as not found', async () => {
+    routeFetch(() => ({ body: { not_found: { movies: [{ ids: { tmdb: 550 } }], shows: [] } } }));
+    const res = await new SimklClient(cfg).pushWatchlist([{ ref: { kind: 'movie', ids: { tmdb: 550 } } }]);
+    expect(res.notFound).toBe(1);
+    expect(res.added).toBe(0);
+  });
+
+  it('removes with a plain media-ids body', async () => {
+    const calls = routeFetch(() => ({ body: {} }));
+    const res = await new SimklClient(cfg).removeWatchlist([{ ref: { kind: 'movie', ids: { tmdb: 550 } } }]);
+    expect(res.added).toBe(1);
+    const post = calls.find((c) => c.url.includes('/sync/history/remove'))!;
+    expect(post.body).toEqual({ movies: [{ ids: { tmdb: 550 } }], shows: [] });
+  });
+
+  it('does not send an item with no usable id', async () => {
+    const calls = routeFetch(() => ({ body: {} }));
+    const res = await new SimklClient(cfg).pushWatchlist([{ ref: { kind: 'movie', ids: {} } }]);
+    expect(res.notFound).toBe(1);
+    expect(calls).toHaveLength(0);
+  });
+});

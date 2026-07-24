@@ -7,9 +7,10 @@ import type {
   PushResult,
   RatingEvent,
   WatchEvent,
+  WatchlistEvent,
 } from '../providers/types.js';
 import { createLogger } from '../logger.js';
-import { planHistorySync, planProgressSync, planRatingsSync } from './plan.js';
+import { planHistorySync, planProgressSync, planRatingsSync, planWatchlistSync } from './plan.js';
 import { itemKey } from './identity.js';
 import { includedByFilters, type SyncFilters } from './filters.js';
 
@@ -24,6 +25,8 @@ export interface SyncSource {
   pullProgress(): Promise<ProgressEvent[]>;
   /** Present only on providers that expose user ratings (Trakt, Simkl). */
   pullRatings?(): Promise<RatingEvent[]>;
+  /** Present only on providers that expose a watchlist (Trakt, Simkl). */
+  pullWatchlist?(): Promise<WatchlistEvent[]>;
   /** A newer delta cursor after a pull, if the provider tracks one (Simkl). */
   readonly lastActivityAll?: string;
 }
@@ -34,6 +37,9 @@ export interface SyncTarget extends SyncSource {
   pushProgress(events: ProgressEvent[]): Promise<PushResult>;
   /** Present only on providers that accept rating writes (Trakt, Simkl). */
   pushRatings?(events: RatingEvent[]): Promise<PushResult>;
+  /** Present only on providers that accept watchlist writes (Trakt, Simkl). */
+  pushWatchlist?(events: WatchlistEvent[]): Promise<PushResult>;
+  removeWatchlist?(events: WatchlistEvent[]): Promise<PushResult>;
 }
 
 export interface DataTypeReport {
@@ -45,6 +51,8 @@ export interface DataTypeReport {
   unmatched: number;
   notFound: number;
   failed: number;
+  /** Watchlist only, and only when removal propagation is switched on. */
+  removed?: number;
   /** Set when the pair can't sync this data type (e.g. Simkl progress). */
   note?: string;
 }
@@ -76,6 +84,11 @@ export interface RunSyncOptions {
   filters?: SyncFilters;
   /** For ratings: the provider whose rating wins a conflict. */
   ratingsAuthority?: ProviderId;
+  /**
+   * For watchlist: also take items off the target when the source no longer
+   * lists them. Off by default, because a removal is not reversible from here.
+   */
+  propagateWatchlistRemovals?: boolean;
   /** Injected clock for deterministic timestamps in tests. */
   now?: () => Date;
 }
@@ -104,6 +117,10 @@ export async function runSync(
       results.push(await runProgress(source, target, options.preview, options.filters));
     } else if (dataType === 'ratings') {
       results.push(await runRatings(source, target, options.preview, options.ratingsAuthority, options.filters));
+    } else if (dataType === 'watchlist') {
+      results.push(
+        await runWatchlist(source, target, options.preview, options.propagateWatchlistRemovals === true, options.filters),
+      );
     } else {
       results.push(emptyReport(dataType, `${dataType} sync is not implemented yet`));
     }
@@ -218,10 +235,58 @@ async function runRatings(
   return report;
 }
 
+async function runWatchlist(
+  source: SyncSource,
+  target: SyncTarget,
+  preview: boolean,
+  propagateRemovals: boolean,
+  filters?: SyncFilters,
+): Promise<DataTypeReport> {
+  if (!source.capabilities().watchlist || !source.pullWatchlist) {
+    return emptyReport('watchlist', `${source.id} does not expose a watchlist`);
+  }
+  if (!target.capabilities().watchlist || !target.pushWatchlist || !target.pullWatchlist) {
+    return emptyReport('watchlist', `${target.id} does not accept watchlist changes`);
+  }
+  // Removals are only planned when the target can actually carry them out.
+  const canRemove = propagateRemovals && Boolean(target.removeWatchlist);
+
+  const [srcAll, tgt] = await Promise.all([source.pullWatchlist(), target.pullWatchlist()]);
+  const src = srcAll.filter((e) => includedByFilters(e.ref, filters));
+  const plan = planWatchlistSync(src, tgt, { propagateRemovals: canRemove });
+  const report: DataTypeReport = {
+    dataType: 'watchlist',
+    planned: plan.toAdd.length + plan.toRemove.length,
+    added: 0,
+    skippedPresent: plan.skippedPresent,
+    skippedOther: plan.skippedDuplicate,
+    unmatched: plan.unmatched.length,
+    notFound: 0,
+    failed: 0,
+    ...(canRemove ? { removed: 0 } : {}),
+  };
+  if (propagateRemovals && !canRemove) {
+    report.note = `${target.id} cannot remove watchlist items, so only additions were applied`;
+  }
+
+  if (!preview && plan.toAdd.length > 0) {
+    applyPush(report, await target.pushWatchlist(plan.toAdd));
+  }
+  if (!preview && canRemove && plan.toRemove.length > 0) {
+    const res = await target.removeWatchlist!(plan.toRemove);
+    report.removed = res.added;
+    report.notFound += res.notFound;
+    report.failed += res.failed;
+    if (res.note) report.note = res.note;
+  }
+  return report;
+}
+
 function applyPush(report: DataTypeReport, res: PushResult): void {
   report.added = res.added;
   report.notFound += res.notFound;
   report.failed += res.failed;
+  if (res.note) report.note = res.note;
 }
 
 function emptyReport(dataType: DataType, note: string): DataTypeReport {
