@@ -34,15 +34,16 @@ hard to write.
 `Have it?` is `no` or `partial`. Items already fully built were dropped from the tables and are
 named in an "already covered" line at the end of each section.
 
-## Verify this one first
+## The audit's top finding — fixed
 
-**Trakt playback progress is pulled without pagination and truncates at 100 items.**
+**Trakt playback progress was pulled without pagination and truncated at 100 items.**
 
-`packages/core/src/providers/trakt.ts:266` requests `/sync/playback?limit=100&extended=full` and
-never asks for a second page, while the history pull at line 390 pages correctly. If Trakt honours
-that `limit` on this endpoint, any user with more than 100 in-progress items silently syncs only the
-first 100. The truncation risk is real and worth a live check; whether `/sync/playback` itself is
-paginated has not been confirmed against the API, so verify before assuming either way.
+`pullProgress` requested `/sync/playback?limit=100&extended=full` and never asked for a second page,
+while the history pull did page correctly, so any user with more than 100 in-progress items silently
+synced only the first 100. It now goes through `pageAll`, which was also hardened for the case this
+raised: whether `/sync/playback` paginates at all was never confirmed, so `pageAll` stops when a
+response exceeds the requested limit (an unpaginated endpoint returning everything at once) and when
+a page repeats its first row (an endpoint ignoring `page`), rather than assuming either behaviour.
 
 The surrounding context is confirmed. Trakt's phased 2026 rollout, per
 [trakt-api discussion #681](https://github.com/trakt/trakt-api/discussions/681), was: mid-February
@@ -65,7 +66,7 @@ guards that protect properties Watchbridge already has, rather than new behaviou
 
 | # | Item | Area | Why it matters | Effort | Score |
 |---|---|---|---|---|---|
-| 1 | Verify Trakt pull paths handle mandatory pagination before June 30 2026 | Providers | Trakt now enforces pagination on /sync/watched and /users/{id}/watched and ignores extended=full; unpaginated pulls will silently return only the... | S | 15 |
+| 1 | Verify Trakt pull paths handle mandatory pagination — DONE, and every milestone has already passed | Providers | Trakt enforces pagination and caps page size; unpaginated pulls silently return only the first page. `pageAll` loops and asks for 100 per page, inside the 250 cap. | S | 15 |
 | 2 | Trakt is actively cutting max page size to 250 and enforcing mandatory pagination | Providers | Trakt's phased 2026 rollout (already past its Feb/April milestones by the current date) makes pagination mandatory on list/collection endpoints,... | S | 15 |
 | 3 | Regression test: same sync re-run never inflates target play count | Sync correctness | Every Trakt media-server plugin has shipped a duplicate-history bug (100x replays, account lockouts); Watchbridge's architecture avoids the root... | S | 15 |
 | 4 | Clamp writes that would push an episode number above the target's known episode total | Sync correctness | No guard exists today to stop a write when the source's episode number exceeds what the target entry actually has — the exact failure mode that... | S | 15 |
@@ -246,7 +247,15 @@ Already covered (dropped): per-sync dataTypes already provides the scrobble-type
 
 ### Notes
 
-- Trakt pagination: `pageAll()` already loops correctly for `getHistory`, but `pullProgress` and the `/sync/playback` call use a flat limit with no loop — audit every Trakt read for this before the mandatory-pagination and 250-item-cap deadlines land (mid-June / June 30 2026). [discussion #775](https://github.com/trakt/trakt-api/discussions/775), [#681](https://github.com/trakt/trakt-api/discussions/681)
+- Trakt pagination — **resolved, and the dates are now pinned.** The earlier "June 30 2026" framing
+  was wrong; there is no such deadline. Verified from
+  [discussion #681](https://github.com/trakt/trakt-api/discussions/681), the rollout was four
+  milestones, **all of which are already in the past**: mid-Feb 2026 (list items paginated, 1,000
+  max), end of Feb 2026 (collection paginated), **15 April 2026** (default page size drops to 100,
+  and to 10 for watchlist and favorites), **15 June 2026** (maximum page size drops from 1,000 to
+  250). Watchbridge complies: `pageAll` loops, always sends an explicit `page` and `limit=100`
+  (inside the 250 cap, and immune to the default-size change), and `pullProgress` now goes through
+  it too. See also [#775](https://github.com/trakt/trakt-api/discussions/775).
 - Simkl anime numbering: `pushHistory` groups episodes by season/number with no `use_tvdb_anime_seasons` flag and no per-episode ids block — very likely the direct cause of the already-open bug where Simkl writes re-add all episodes every run for anime. Fix both: set the flag for TVDB-numbered anime, and send per-episode anidb/tvdb ids where the source has them. [Simkl API ref](https://api.simkl.org/api-reference/simkl/add-to-history.md), [CrossWatch #394](https://github.com/cenodude/CrossWatch/issues/394), [jellyfin-plugin-simkl #23](https://github.com/jellyfin/jellyfin-plugin-simkl/issues/23)
 - HTTP status semantics belong in one mapping: 409 = already-in-that-state (skip, never retry), 420 = permanent account/plan limit, 423 = provider has blocked the app (circuit-break), 429/5xx = backoff and retry. Skipping this is exactly how jellyfin-plugin-trakt ended up retrying a 409 and clobbering a user's resume position. [jellyfin-plugin-trakt #289](https://github.com/jellyfin/jellyfin-plugin-trakt/issues/289), [discussion #350](https://github.com/trakt/trakt-api/discussions/350)
 - Refresh-token race: `ConnectionService` builds a fresh `TraktClient` per call with no shared lock, so two concurrent syncs on the same Trakt connection can both refresh near expiry and the second reuses an already-rotated (single-use) refresh token, locking the connection out. Add a per-connection lock around the refresh path. [discussion #495](https://github.com/trakt/trakt-api/discussions/495)
@@ -593,9 +602,18 @@ Overall the audit is thorough on sync correctness, provider quirks, and observab
 
 ### Claims to re-verify
 
-- `[data-types] Rewatch / multiple-plays history not modelled — now supported end-to-end (Trakt native, Simkl sessions since 2026-05-22)` — the rewatch/session feature itself is real (Simkl's `POST /sync/history?allow_rewatch=yes`, up to 50 sessions, Pro/VIP-gated), but 2026-05-22 looks like it's been conflated with the date Simkl's *API docs* were frozen ahead of migrating off Apiary (Apiary is being sunset by Oracle in Oct 2026), not the date the rewatch feature itself shipped. Re-check the actual feature-launch date before citing it.
-- `[providers-integrations] Verify Trakt pull paths handle mandatory pagination before June 30 2026` and the related "before June 30 2026" framing — the pagination change itself (250-item max page, mandatory pagination, tiered rollout through Feb/March) is real per [trakt/trakt-api discussion #681](https://github.com/trakt/trakt-api/discussions/681) and [#775](https://github.com/trakt/trakt-api/discussions/775), but I could not independently confirm "June 30 2026" as the hard deadline in what I fetched — worth pinning down the exact date from the Trakt discussion thread before treating it as a ship-by date.
-- The TV-Time-related items (`Reliable TV Time -> Trakt/Simkl migration importer`, `TV Time GDPR-export importer (time-boxed migration wave)`) are directionally right about the CSV-only, time-boxed nature, but should be updated with the now-known facts: TV Time shut down July 15, 2026 (already past), the only import path is TV Time's own GDPR export (`tracking-prod-records-v2.csv`), and TVmaze already shipped a dedicated importer for that exact file on July 2, 2026 — so this is no longer a forward-looking opportunity, it's a closing/closed one with a first-mover already in place.
+- Simkl rewatch sessions — **the date has been dropped rather than defended.** The feature is real
+  (`POST /sync/history?allow_rewatch=yes`, up to 50 sessions, Pro/VIP-gated). The "2026-05-22" date
+  was never verified as the feature's launch and most likely belongs to the freeze of Simkl's Apiary
+  docs. Do not cite a launch date for it without a source.
+- ~~`before June 30 2026`~~ — **checked and corrected.** No such deadline exists. Discussion #681
+  lists four milestones (mid-Feb, end-Feb, 15 April, 15 June 2026), all now past. Watchbridge is
+  compliant. Corrected in the table and notes above.
+- TV Time — **the window has closed; treat the importer items as low priority, not as an
+  opportunity.** TV Time shut down on 15 July 2026, the only import path is its own GDPR export
+  (`tracking-prod-records-v2.csv`), and TVmaze shipped a dedicated importer for that exact file on
+  2 July 2026. Trakt, Simkl and Serializd absorbed the same wave. Anything built now is a late
+  entrant serving people who exported months ago and have not yet migrated.
 - `100-item third-party 'Physical Library' cap` and the `1000-item list cap` both check out against Trakt's 2026 fair-use-policy changes and forum threads — no issue, just noting these are solid.
 
 
