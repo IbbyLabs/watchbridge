@@ -614,11 +614,22 @@ tables above for context; this list is the authoritative record of what is done.
 | A failing data type no longer discards the rest of the run (#20) | `runSync` per-type isolation |
 | Connection flagged for reconnection when credentials are rejected (#7, #14 partial) | `ConnectionService.watchCredentials` |
 | Last-run outcome visible per sync (#26) | `LastRunPill` on the syncs page |
+| One shared pace per upstream, not one per client (#11) | `packages/core/src/providers/rateGate.ts` |
+| Preview goes through the concurrency gate and single-flight lock | `SyncScheduler.previewNow` |
+| PMDB resume positions never become invented plays (#9 partial, #10) | `PmdbClient.pushProgress` |
 | Ratings sync (Trakt <-> Simkl) | `planRatingsSync`, provider `pull/pushRatings` |
 | Watchlist sync (Trakt <-> Simkl) | `planWatchlistSync`, provider `pull/push/removeWatchlist` |
 | Per-sync scope filters | `packages/core/src/sync/filters.ts` |
 | Startup guard for an unusable encryption key | `packages/server/src/db/encryptionKey.ts` |
 | Structured per-run logging | `SyncRunner.logRun` |
+
+Two items were already fixed before the audit and are listed in it in error:
+
+- **#19 / #23 Simkl episode non-convergence.** Fixed in v0.4.3 by the `deliveries` table.
+  Simkl accepts writes for shows whose seasons it models as separate entries and then never
+  echoes them back under the ids the sync reads by, so client-side delivery memory is what
+  makes it converge. Verified end to end at the time: run 1 planned 133, run 2 planned 0.
+- **#3 Re-run never inflates the target.** Covered by `regressions.test.ts`.
 
 Still open and worth noting:
 

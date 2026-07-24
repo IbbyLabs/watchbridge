@@ -31,14 +31,52 @@ export interface HttpOptions {
   gate?: RateGate;
 }
 
+/**
+ * Query parameters whose values are credentials. Some providers authenticate by
+ * query string (MDBList uses `?apikey=`), and this error's message reaches the
+ * run report, the database and the browser — so the value must never travel with it.
+ */
+const SECRET_PARAMS = new Set([
+  'apikey',
+  'api_key',
+  'key',
+  'token',
+  'access_token',
+  'refresh_token',
+  'client_secret',
+  'password',
+  'secret',
+]);
+
+/** A URL safe to log or store: credential-bearing query values are replaced. */
+export function redactUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    for (const name of [...u.searchParams.keys()]) {
+      if (SECRET_PARAMS.has(name.toLowerCase())) u.searchParams.set(name, 'redacted');
+    }
+    return u.toString();
+  } catch {
+    // Unparseable, so the query cannot be inspected — drop it wholesale rather
+    // than risk passing a credential through.
+    const cut = raw.indexOf('?');
+    return cut === -1 ? raw : `${raw.slice(0, cut)}?redacted`;
+  }
+}
+
 export class HttpError extends Error {
+  /** Always redacted — see `redactUrl`. */
+  readonly url: string;
+
   constructor(
     readonly status: number,
     readonly body: string,
-    readonly url: string,
+    url: string,
   ) {
-    super(`HTTP ${status} for ${url}`);
+    const safe = redactUrl(url);
+    super(`HTTP ${status} for ${safe}`);
     this.name = 'HttpError';
+    this.url = safe;
   }
 }
 
@@ -150,7 +188,7 @@ export class HttpClient {
       if (res.status === 429 || res.status >= 500) {
         if (attempt < this.opts.maxRetries) {
           const wait = this.backoff(res, attempt);
-          log.warn({ url, status: res.status, attempt, wait }, 'Retrying after backoff');
+          log.warn({ url: redactUrl(url), status: res.status, attempt, wait }, 'Retrying after backoff');
           await sleep(wait);
           attempt++;
           continue;

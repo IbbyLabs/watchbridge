@@ -13,6 +13,7 @@ import { createLogger } from '../logger.js';
 import { planHistorySync, planProgressSync, planRatingsSync, planWatchlistSync } from './plan.js';
 import { itemKey } from './identity.js';
 import { includedByFilters, type SyncFilters } from './filters.js';
+import { describeProviderError } from '../providers/errors.js';
 
 const log = createLogger('sync');
 
@@ -129,9 +130,11 @@ export async function runSync(
         results.push(emptyReport(dataType, `${dataType} sync is not implemented yet`));
       }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
       log.error({ source: source.id, target: target.id, dataType, err }, 'Data type failed mid-run');
-      results.push({ ...emptyReport(dataType, `${dataType} could not be synced: ${reason}`), failed: 1 });
+      // Either side can be the one that failed; the target is the likelier
+      // culprit for a write, so name it and let the message carry the detail.
+      const reason = describeProviderError(target.id, err);
+      results.push({ ...emptyReport(dataType, `${dataType} could not be synced. ${reason}`), failed: 1 });
     }
   }
 

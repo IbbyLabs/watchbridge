@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import {
   runSync,
   createLogger,
+  describeProviderError,
   type DataType,
   type ProviderId,
   type SyncFilters,
@@ -144,7 +145,9 @@ export class SyncRunner {
         }
       }
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      // Stored on the run and shown to the user, so it has to read as a sentence
+      // rather than a status code.
+      const error = describeProviderError(sync.target as ProviderId, err);
       log.error({ syncId: sync.id, err }, 'Sync run failed');
       return this.finish(sync, trigger, { status: 'error', reports, error }, startedAt);
     }
