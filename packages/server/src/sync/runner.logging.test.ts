@@ -16,7 +16,7 @@ vi.mock('@watchbridge/core', async () => {
 });
 
 const { createDb } = await import('../db/client.js');
-const { users, syncs } = await import('../db/schema.js');
+const { users, syncs, deliveries } = await import('../db/schema.js');
 const { SyncRunner } = await import('./runner.js');
 type Db = Awaited<ReturnType<typeof createDb>>;
 
@@ -245,3 +245,46 @@ describe('weekly full reconciliation', () => {
     expect((await sync()).lastFullReconcileAt).toBeNull();
   });
 });
+
+describe('delivery memory survives a full re-read', () => {
+  const sync = async () => (await db.orm.select().from(syncs))[0]!;
+
+  // A target that accepts writes but never reflects them on read, the way Simkl
+  // does for shows whose seasons it models separately.
+  const swallowingPair = () =>
+    vi.mocked(connections.clientFor).mockImplementation(async (_u: string, p: string) => {
+      if (p === 'trakt') {
+        return {
+          ...stubClient('trakt'),
+          pullHistory: async () => [{ ref: { kind: 'movie' as const, ids: { tmdb: 99 } }, watchedAt: null }],
+        };
+      }
+      return {
+        ...stubClient('simkl'),
+        pullHistory: async () => [],
+        pushHistory: async (events: unknown[]) => ({ added: events.length, skipped: 0, failed: 0, notFound: 0 }),
+      };
+    });
+
+  beforeEach(async () => {
+    await db.orm.delete(deliveries);
+    await db.orm.update(syncs).set({ cursors: '{}', lastFullReconcileAt: null });
+  });
+
+  it('does not re-push an item on a forced full read once it has been delivered', async () => {
+    swallowingPair();
+
+    const first = await runner.execute(await sync(), 'scheduled');
+    expect(first.reports[0]!.results[0]!.added).toBe(1);
+
+    // Force the next run to be a full reconcile too (cursor ignored), the exact
+    // condition under which a naive sync would re-push everything.
+    await db.orm.update(syncs).set({ lastFullReconcileAt: null, cursors: '{}' });
+
+    const second = await runner.execute(await sync(), 'scheduled');
+    const history = second.reports[0]!.results[0]!;
+    expect(history.added).toBe(0);
+    expect(history.planned).toBe(0);
+    expect(history.skippedPresent).toBe(1);
+  });
+})

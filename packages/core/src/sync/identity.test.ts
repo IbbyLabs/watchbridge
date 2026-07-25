@@ -68,3 +68,53 @@ describe('episode identity requires a season and an episode number', () => {
     expect(index.has(ep())).toBe(false);
   });
 });
+
+
+describe('an item with no usable id never collides with another', () => {
+  const idless = (kind: MediaRef['kind'], extra: Partial<MediaRef> = {}): MediaRef => ({
+    kind,
+    ids: {},
+    ...extra,
+  });
+
+  it('gives an id-less movie no identity and no key', () => {
+    const movie = idless('movie', { title: 'Some Film' });
+    expect(hasIdentity(movie)).toBe(false);
+    expect(itemKey(movie)).toBeNull();
+    expect(idStrings(movie)).toEqual([]);
+  });
+
+  it('does not match two distinct id-less movies to each other', () => {
+    const a = idless('movie', { title: 'Film A', year: 1999 });
+    const b = idless('movie', { title: 'Film B', year: 2001 });
+    expect(MatchIndex.from([a]).has(b)).toBe(false);
+    // Not even against itself, because it carries nothing to match on.
+    expect(MatchIndex.from([a]).has(a)).toBe(false);
+  });
+
+  it('does not match id-less items across kinds', () => {
+    const movie = idless('movie', { title: 'X' });
+    const show = idless('show', { title: 'X' });
+    const episode = idless('episode', { title: 'X', season: 1, number: 1 });
+    expect(MatchIndex.from([movie]).has(show)).toBe(false);
+    expect(MatchIndex.from([show]).has(episode)).toBe(false);
+    expect(MatchIndex.from([episode]).has(movie)).toBe(false);
+  });
+
+  it('keys different kinds that share a raw id value distinctly', () => {
+    // A movie and a show that happen to reuse tmdb 550 must not be confused.
+    expect(itemKey({ kind: 'movie', ids: { tmdb: 550 } })).not.toBe(
+      itemKey({ kind: 'show', ids: { tmdb: 550 } }),
+    );
+    expect(MatchIndex.from([{ kind: 'movie', ids: { tmdb: 550 } }]).has({ kind: 'show', ids: { tmdb: 550 } })).toBe(
+      false,
+    );
+  });
+
+  it('does not treat a blank string or zero id as a usable id', () => {
+    expect(hasIdentity({ kind: 'movie', ids: { imdb: '', slug: '' } })).toBe(false);
+    expect(MatchIndex.from([{ kind: 'movie', ids: { imdb: '' } }]).has({ kind: 'movie', ids: { imdb: '' } })).toBe(
+      false,
+    );
+  });
+});
