@@ -54,7 +54,7 @@ independently raised this as the highest-scoring finding in the audit.
 
 The code reading is first-hand. The dates are from Trakt's own discussion thread.
 
-## Known bug in the shipped watchlist feature (needs a decision)
+## Watchlist auto-removal bug — FIXED (delivery memory, Ibby chose option A)
 
 **Trakt auto-removes a watchlist item once it is watched** — confirmed verbatim from Trakt's own
 docs: *"When an item is watched, it will be automatically removed from the watchlist. For shows and
@@ -63,15 +63,11 @@ so when Simkl still lists a title as plan-to-watch (or hold) but Trakt has auto-
 each run re-adds it to Trakt, Trakt drops it again, and it never converges — burning the Trakt write
 limit every run.
 
-The fix is a behaviour fork, so it is **not** built yet:
-- **Delivery memory for watchlist adds** (mirrors history): once added, never re-added even if the
-  target no longer lists it. Stops the loop; consistent with the already-locked additive model; but a
-  *manual* removal on the target is then also not undone. Needs a data-type discriminator on the
-  `deliveries` table.
-- **Watched-status check**: skip re-adding a title already watched on the target. Surgical to this
-  exact case; leaves manual re-adds working; but couples watchlist sync to a history pull.
-
-Awaiting Ibby's choice. Until then, a Trakt-target watchlist sync will not converge on watched titles.
+**Fixed** by delivery memory for watchlist adds (the same mechanism history uses): once a title is
+added to a target's watchlist it is recorded, and not re-added even if the target has since dropped
+it. Keyed separately from history via a `data_type` column on `deliveries` (migration 0013). Removed
+items leave the ledger so they can be delivered again if they return to the source. Tradeoff, as with
+history: a title you *manually* remove from the target's watchlist is not re-added from the source.
 
 ## What the audit confirms is already right
 
