@@ -1,0 +1,1 @@
+ALTER TABLE "syncs" ADD COLUMN "last_full_reconcile_at" timestamp with time zone;

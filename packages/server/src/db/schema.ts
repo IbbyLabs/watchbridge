@@ -137,6 +137,8 @@ export const syncs = pgTable(
     lastRunAt: timestamp('last_run_at', { withTimezone: true }),
     /** Status of the most recent non-preview run, so the list needs no per-row query. */
     lastRunStatus: text('last_run_status'),
+    /** When this sync last ignored its delta cursor and re-read everything. */
+    lastFullReconcileAt: timestamp('last_full_reconcile_at', { withTimezone: true }),
   },
   (t) => [index('syncs_user_idx').on(t.userId), index('syncs_enabled_idx').on(t.enabled)],
 );

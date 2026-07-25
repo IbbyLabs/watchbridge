@@ -79,8 +79,23 @@ export class SyncRunner {
   constructor(
     private readonly db: Db,
     private readonly connections: ConnectionService,
+    /** Hours between forced full re-reads that ignore the delta cursor. 0 disables it. */
+    private readonly reconcileIntervalHours = 168,
   ) {
     this.deliveries = new DeliveriesStore(db);
+  }
+
+  /**
+   * Whether this run should ignore the delta cursor and re-read everything. A
+   * Simkl cursor can silently stop advancing (an activities read failing, or the
+   * account being reconnected), and a delta pull against a stuck cursor keeps
+   * skipping the same window forever. A periodic full read heals that on its own.
+   */
+  private dueForFullReconcile(sync: Sync, now: Date): boolean {
+    if (this.reconcileIntervalHours <= 0) return false;
+    const last = sync.lastFullReconcileAt?.getTime();
+    if (last === undefined) return true;
+    return now.getTime() - last >= this.reconcileIntervalHours * 3_600_000;
   }
 
   /** Plan only — nothing is written, nothing is persisted. */
@@ -105,6 +120,8 @@ export class SyncRunner {
 
     const cursors = parseCursors(sync.cursors);
     const filters = parseFilters(sync.filters);
+    // A preview should not consume the reconciliation window; only a real run does.
+    const fullReconcile = !preview && this.dueForFullReconcile(sync, startedAt);
     const ratingsAuthority = (sync.ratingsAuthority as ProviderId | null) ?? undefined;
     // Never on a two-way sync: the forward pass would delete an item the user
     // had just added on the other side, before the return pass could carry it over.
@@ -121,6 +138,7 @@ export class SyncRunner {
       cursor: cursors[key(sync.source)] ? 'saved' : 'none',
       filters: filters ? 'applied' : 'none',
       watchlistRemovals: propagateWatchlistRemovals ? 'on' : 'off',
+      read: fullReconcile ? 'full' : 'delta',
     };
     try {
       const forward = await runSync(source, target, {
@@ -129,7 +147,8 @@ export class SyncRunner {
         filters,
         ratingsAuthority,
         propagateWatchlistRemovals,
-        since: cursors[key(sync.source)] ?? null,
+        // On a reconciliation run, drop the cursor so the source re-reads everything.
+        since: fullReconcile ? null : (cursors[key(sync.source)] ?? null),
         deliveredHistory: forwardDelivered,
       });
       reports.push(forward);
@@ -145,7 +164,7 @@ export class SyncRunner {
           filters,
           ratingsAuthority,
           propagateWatchlistRemovals,
-          since: cursors[key(sync.target)] ?? null,
+          since: fullReconcile ? null : (cursors[key(sync.target)] ?? null),
           deliveredHistory: await this.deliveries.load(sync.id, sync.source),
         });
         reports.push(back);
@@ -163,7 +182,11 @@ export class SyncRunner {
     }
 
     const failed = reports.some((r) => r.results.some((x) => x.failed > 0));
-    return this.finish(sync, trigger, { status: failed ? 'partial' : 'success', reports }, startedAt, cursors, guards);
+    const status = failed ? 'partial' : 'success';
+    // Only count the reconciliation as done when the read actually succeeded, so a
+    // failed full read is retried next run rather than deferred a whole interval.
+    const reconciledAt = fullReconcile && status === 'success' ? startedAt : undefined;
+    return this.finish(sync, trigger, { status, reports }, startedAt, cursors, guards, reconciledAt);
   }
 
   private async finish(
@@ -173,6 +196,7 @@ export class SyncRunner {
     startedAt: Date,
     cursors?: Record<string, string>,
     guards?: Record<string, unknown>,
+    reconciledAt?: Date,
   ): Promise<RunOutcome> {
     if (trigger === 'preview') return outcome;
 
@@ -200,6 +224,7 @@ export class SyncRunner {
         lastRunStatus: outcome.status,
         updatedAt: now,
         ...(cursors ? { cursors: JSON.stringify(cursors) } : {}),
+        ...(reconciledAt ? { lastFullReconcileAt: reconciledAt } : {}),
       })
       .where(eq(syncs.id, sync.id));
 

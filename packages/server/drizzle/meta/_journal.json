@@ -85,6 +85,13 @@
       "when": 1784939135366,
       "tag": "0011_scrub_leaked_apikeys_from_errors",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1784939262827,
+      "tag": "0012_add_last_full_reconcile",
+      "breakpoints": true
     }
   ]
 }

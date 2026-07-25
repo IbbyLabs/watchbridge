@@ -55,6 +55,9 @@ const envSchema = z.object({
   MAX_CONCURRENT_SYNCS_GLOBAL: z.coerce.number().int().positive().default(4),
   MAX_CONCURRENT_SYNCS_PER_USER: z.coerce.number().int().positive().default(1),
   MIN_SCHEDULE_INTERVAL_MINUTES: z.coerce.number().int().min(5).default(15),
+  // How often a scheduled sync ignores its delta cursor and re-reads everything,
+  // so a cursor that has silently stopped advancing self-heals. 0 turns it off.
+  FULL_RECONCILE_INTERVAL_HOURS: z.coerce.number().int().min(0).default(168),
 
   // SMTP
   SMTP_HOST: z.string().optional(),

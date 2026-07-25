@@ -161,7 +161,8 @@ describe('the run line records which guards were in effect', () => {
   const sync = async () => (await db.orm.select().from(syncs))[0]!;
 
   it('reports delivery memory, cursor, filters and removal state', async () => {
-    await db.orm.update(syncs).set({ filters: JSON.stringify({ movies: false }) });
+    // A recent reconcile keeps this a normal delta run rather than a forced full one.
+    await db.orm.update(syncs).set({ filters: JSON.stringify({ movies: false }), lastFullReconcileAt: new Date() });
     await runner.execute(await sync(), 'scheduled');
 
     const [line] = logged.filter((l) => l.msg === 'Sync run finished');
@@ -170,12 +171,14 @@ describe('the run line records which guards were in effect', () => {
       cursor: 'none',
       filters: 'applied',
       watchlistRemovals: 'off',
+      read: 'delta',
     });
 
     await db.orm.update(syncs).set({ filters: null });
   });
 
   it('says so when no filter is set', async () => {
+    await db.orm.update(syncs).set({ lastFullReconcileAt: new Date() });
     await runner.execute(await sync(), 'scheduled');
     const [line] = logged.filter((l) => l.msg === 'Sync run finished');
     expect((line.fields.guards as { filters: string }).filters).toBe('none');
@@ -190,5 +193,55 @@ describe('the run line records which guards were in effect', () => {
     const [line] = logged.filter((l) => l.msg === 'Sync run finished');
     expect(line.fields).not.toHaveProperty('guards');
     expect(String(line.fields.error)).toContain('not connected');
+  });
+});
+
+describe('weekly full reconciliation', () => {
+  const sync = async () => (await db.orm.select().from(syncs))[0]!;
+
+  // A source that only returns items when read in full (since === null), the way
+  // a stuck delta cursor would keep skipping the same window.
+  const fullOnlySource = (id: string) => ({
+    ...stubClient(id),
+    lastActivityAll: 'FRESH',
+    pullHistory: async (since?: string | null) =>
+      since ? [] : [{ ref: { kind: 'movie' as const, ids: { tmdb: 1 } }, watchedAt: null }],
+  });
+
+  beforeEach(async () => {
+    await db.orm.update(syncs).set({ cursors: JSON.stringify({ 'trakt:history': 'STALE' }), lastFullReconcileAt: null });
+  });
+
+  it('ignores the cursor on the first scheduled run and records the reconcile', async () => {
+    vi.mocked(connections.clientFor).mockImplementation(async (_u: string, p: string) => fullOnlySource(p));
+    await runner.execute(await sync(), 'scheduled');
+
+    const [line] = logged.filter((l) => l.msg === 'Sync run finished');
+    expect((line.fields.guards as { read: string }).read).toBe('full');
+    expect((await sync()).lastFullReconcileAt).not.toBeNull();
+  });
+
+  it('uses the delta cursor again once a reconcile is recent', async () => {
+    await db.orm.update(syncs).set({ lastFullReconcileAt: new Date() });
+    vi.mocked(connections.clientFor).mockImplementation(async (_u: string, p: string) => fullOnlySource(p));
+
+    await runner.execute(await sync(), 'scheduled');
+    const [line] = logged.filter((l) => l.msg === 'Sync run finished');
+    expect((line.fields.guards as { read: string }).read).toBe('delta');
+  });
+
+  it('reconciles again once the interval has elapsed', async () => {
+    await db.orm.update(syncs).set({ lastFullReconcileAt: new Date(Date.now() - 8 * 24 * 3_600_000) });
+    vi.mocked(connections.clientFor).mockImplementation(async (_u: string, p: string) => fullOnlySource(p));
+
+    await runner.execute(await sync(), 'scheduled');
+    const [line] = logged.filter((l) => l.msg === 'Sync run finished');
+    expect((line.fields.guards as { read: string }).read).toBe('full');
+  });
+
+  it('does not consume the window on a preview', async () => {
+    vi.mocked(connections.clientFor).mockImplementation(async (_u: string, p: string) => fullOnlySource(p));
+    await runner.execute(await sync(), 'preview');
+    expect((await sync()).lastFullReconcileAt).toBeNull();
   });
 });
