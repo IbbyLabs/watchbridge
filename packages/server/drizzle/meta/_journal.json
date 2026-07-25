@@ -78,6 +78,13 @@
       "when": 1784895465635,
       "tag": "0010_yellow_tarot",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784939135366,
+      "tag": "0011_scrub_leaked_apikeys_from_errors",
+      "breakpoints": true
     }
   ]
 }
