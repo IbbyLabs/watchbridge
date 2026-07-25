@@ -172,6 +172,7 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
           <Pill tone="neutral">ratings from {PROVIDER_LABEL[sync.ratingsAuthority]}</Pill>
         )}
         {sync.propagateWatchlistRemovals && <Pill tone="neutral">watchlist removals on</Pill>}
+        {sync.stalled && <Pill tone="danger">Stalled — not running on schedule</Pill>}
         <LastRunPill sync={sync} now={now} />
         <div className="ml-auto flex items-center gap-2">
           <Button variant="ghost" onClick={toggle}>

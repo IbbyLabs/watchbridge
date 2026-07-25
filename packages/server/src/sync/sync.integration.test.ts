@@ -289,3 +289,46 @@ describe('preview goes through the same gate as a run', () => {
     expect(res.json().reports[0].results[0].dataType).toBe('history');
   });
 });
+
+describe('stalled indicator', () => {
+  const make = async (payload: Record<string, unknown>) =>
+    (await authed({ method: 'POST', url: '/api/syncs', payload: { source: 'trakt', target: 'pmdb', dataTypes: ['history'], ...payload } })).json();
+
+  const setLastRun = async (id: string, at: Date | null) => {
+    const { syncs } = await import('../db/schema.js');
+    const { eq } = await import('drizzle-orm');
+    await db.orm.update(syncs).set({ lastRunAt: at }).where(eq(syncs.id, id));
+  };
+
+  it('is false for a manual-only sync (no interval)', async () => {
+    const s = await make({ name: 'Manual' });
+    expect(s.stalled).toBe(false);
+  });
+
+  it('is false right after a scheduled sync is created', async () => {
+    const s = await make({ name: 'Fresh', intervalMinutes: 60 });
+    expect(s.stalled).toBe(false);
+  });
+
+  it('flags a scheduled sync whose last run is well past its interval', async () => {
+    const s = await make({ name: 'Lagging', intervalMinutes: 60 });
+    await setLastRun(s.id, new Date(Date.now() - 5 * 3600_000)); // 5h ago, interval 1h
+    const list = (await authed({ method: 'GET', url: '/api/syncs' })).json() as Array<{ id: string; stalled: boolean }>;
+    expect(list.find((x) => x.id === s.id)!.stalled).toBe(true);
+  });
+
+  it('does not flag a scheduled sync that ran recently', async () => {
+    const s = await make({ name: 'Healthy', intervalMinutes: 60 });
+    await setLastRun(s.id, new Date(Date.now() - 30 * 60_000)); // 30m ago
+    const list = (await authed({ method: 'GET', url: '/api/syncs' })).json() as Array<{ id: string; stalled: boolean }>;
+    expect(list.find((x) => x.id === s.id)!.stalled).toBe(false);
+  });
+
+  it('does not flag a paused sync even if it is overdue', async () => {
+    const s = await make({ name: 'Paused', intervalMinutes: 60 });
+    await setLastRun(s.id, new Date(Date.now() - 10 * 3600_000));
+    await authed({ method: 'PATCH', url: `/api/syncs/${s.id}`, payload: { enabled: false } });
+    const list = (await authed({ method: 'GET', url: '/api/syncs' })).json() as Array<{ id: string; stalled: boolean }>;
+    expect(list.find((x) => x.id === s.id)!.stalled).toBe(false);
+  });
+});

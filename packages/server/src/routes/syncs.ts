@@ -87,7 +87,23 @@ function parseFilters(raw: string | null): z.infer<typeof filters> | null {
   }
 }
 
-function toPublic(s: Sync) {
+/**
+ * A scheduled sync is "stalled" when it is enabled, has a run interval, yet its
+ * last run is far older than that interval. Because even a failed run updates
+ * `lastRunAt`, a lagging timestamp means the scheduler never dispatched it — a
+ * genuine fault the aggregate counts would otherwise hide. Purely derived; it
+ * does not change how anything syncs.
+ */
+const STALL_GRACE = 2.5;
+
+function isStalled(s: Sync, now: number): boolean {
+  if (!s.enabled || !s.intervalMinutes) return false;
+  const intervalMs = s.intervalMinutes * 60_000;
+  const reference = s.lastRunAt?.getTime() ?? s.createdAt.getTime();
+  return now - reference > intervalMs * STALL_GRACE;
+}
+
+function toPublic(s: Sync, now = Date.now()) {
   return {
     id: s.id,
     name: s.name,
@@ -102,6 +118,7 @@ function toPublic(s: Sync) {
     enabled: s.enabled,
     lastRunAt: s.lastRunAt,
     lastRunStatus: s.lastRunStatus,
+    stalled: isStalled(s, now),
     createdAt: s.createdAt,
   };
 }
@@ -131,7 +148,8 @@ export function syncRoutes(
 
   app.get('/api/syncs', auth, async (request, reply) => {
     const rows = await db.orm.select().from(syncs).where(eq(syncs.userId, request.user!.id));
-    return reply.send(rows.map(toPublic));
+    const now = Date.now();
+    return reply.send(rows.map((row) => toPublic(row, now)));
   });
 
   app.post('/api/syncs', auth, async (request, reply) => {

@@ -58,6 +58,7 @@ export interface Sync {
   enabled: boolean;
   lastRunAt: string | null;
   lastRunStatus: 'success' | 'partial' | 'error' | null;
+  stalled: boolean;
   createdAt: string;
 }
 
