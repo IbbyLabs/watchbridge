@@ -672,6 +672,8 @@ tables above for context; this list is the authoritative record of what is done.
 | Every write failure carries its reason, not just a count | Simkl, PMDB, MDBList push paths |
 | Per-item run detail: which items could not be placed, and their ids (#8) | `ReportedItem` / `SkippedItems` |
 | Each run logs which correctness guards were in effect | `guards` in `SyncRunner.logRun` |
+| Stalled-sync indicator: flags a scheduled sync that stopped running on time | `isStalled` in `routes/syncs.ts` |
+| Id-collision and delivery-memory-survives-full-read invariants pinned | `identity.test.ts`, `runner.logging.test.ts` |
 | `LOG_LEVEL` documented in `.env.sample` (it already worked, just undiscoverable) | `.env.sample` |
 | Weekly full reconciliation heals a silently-stuck delta cursor (#18) | `SyncRunner.dueForFullReconcile` |
 | Email alert on a scheduled sync failing/recovering (transition-based) (#15 partial) | `SyncRunner.maybeAlert` |
