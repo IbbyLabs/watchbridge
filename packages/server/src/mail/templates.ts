@@ -136,3 +136,59 @@ export function passwordResetEmail(appName: string, resetUrl: string): RenderedE
     ].join('\n'),
   };
 }
+
+
+/** What a run alert needs, kept provider/detail-light so the email stays short. */
+export interface SyncAlert {
+  syncName: string;
+  /** Human-readable reason, already free of any credential. */
+  reason: string;
+  syncsUrl: string;
+}
+
+export function syncFailureEmail(appName: string, alert: SyncAlert): RenderedEmail {
+  return {
+    subject: `${appName}: “${alert.syncName}” failed`,
+    html: layout({
+      appName,
+      preheader: `A scheduled sync stopped working: ${alert.reason}`,
+      heading: 'A sync failed',
+      bodyHtml:
+        `<p style="margin:0 0 12px">Your scheduled sync <strong>${escapeHtml(alert.syncName)}</strong> did not complete.</p>` +
+        `<p style="margin:0 0 20px;color:${MUTED}">${escapeHtml(alert.reason)}</p>` +
+        `<p style="margin:0 0 20px">It will keep trying on its schedule. If it needs you — usually a reconnection — open your syncs to check.</p>`,
+      cta: { label: 'Open your syncs', url: alert.syncsUrl },
+      footerNote: `You are getting this because a scheduled sync changed to a failing state. You won't be emailed again until it recovers and fails afresh.`,
+    }),
+    text: [
+      `Your scheduled sync "${alert.syncName}" did not complete.`,
+      '',
+      alert.reason,
+      '',
+      `It will keep trying on its schedule. Open your syncs to check: ${alert.syncsUrl}`,
+    ].join('\n'),
+  };
+}
+
+export function syncRecoveryEmail(appName: string, alert: Pick<SyncAlert, 'syncName' | 'syncsUrl'>): RenderedEmail {
+  return {
+    subject: `${appName}: “${alert.syncName}” is working again`,
+    html: layout({
+      appName,
+      preheader: `Your sync recovered and completed.`,
+      heading: 'A sync recovered',
+      bodyHtml: `<p style="margin:0 0 20px">Your sync <strong>${escapeHtml(alert.syncName)}</strong> completed successfully after a failure. Nothing else to do.</p>`,
+      cta: { label: 'Open your syncs', url: alert.syncsUrl },
+    }),
+    text: [`Your sync "${alert.syncName}" completed successfully after a failure. Nothing else to do.`, '', alert.syncsUrl].join('\n'),
+  };
+}
+
+/** Minimal HTML escaping for the one place user-named data reaches an email body. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}

@@ -62,7 +62,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const connectionStore = new ConnectionStore(db, box);
   const connectionService = new ConnectionService(connectionStore, config);
 
-  const runner = new SyncRunner(db, connectionService, config.FULL_RECONCILE_INTERVAL_HOURS);
+  const runner = new SyncRunner(db, connectionService, config.FULL_RECONCILE_INTERVAL_HOURS, {
+    mailer,
+    appUrl: config.APP_URL,
+  });
   const scheduler = new SyncScheduler(db, runner, config);
 
   const limiter = new RateLimiter();

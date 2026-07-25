@@ -1,12 +1,22 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 import { createLogger, type AppConfig } from '@watchbridge/core';
-import { passwordResetEmail, verificationEmail } from './templates.js';
+import {
+  passwordResetEmail,
+  syncFailureEmail,
+  syncRecoveryEmail,
+  verificationEmail,
+  type SyncAlert,
+} from './templates.js';
 
 const log = createLogger('mail');
 
 export interface Mailer {
   sendVerificationEmail: (to: string, verifyUrl: string) => Promise<void>;
   sendPasswordResetEmail: (to: string, resetUrl: string) => Promise<void>;
+  /** Alert the owner that a scheduled sync started failing. */
+  sendSyncFailureEmail: (to: string, alert: SyncAlert) => Promise<void>;
+  /** Tell the owner a previously-failing sync recovered. */
+  sendSyncRecoveryEmail: (to: string, alert: Pick<SyncAlert, 'syncName' | 'syncsUrl'>) => Promise<void>;
   /** Verify the SMTP connection at startup; returns false if unavailable. */
   verify: () => Promise<boolean>;
 }
@@ -48,6 +58,18 @@ export function createMailer(config: AppConfig): Mailer {
       const info = await transport.sendMail({ from, to, subject, text, html });
       if (live) log.info({ to, messageId: info.messageId }, 'Password reset email sent');
       else log.info({ to, resetUrl }, 'Password reset email (dev, not delivered)');
+    },
+    async sendSyncFailureEmail(to, alert) {
+      const { subject, html, text } = syncFailureEmail(appName, alert);
+      const info = await transport.sendMail({ from, to, subject, text, html });
+      if (live) log.info({ to, sync: alert.syncName, messageId: info.messageId }, 'Sync failure email sent');
+      else log.info({ to, sync: alert.syncName }, 'Sync failure email (dev, not delivered)');
+    },
+    async sendSyncRecoveryEmail(to, alert) {
+      const { subject, html, text } = syncRecoveryEmail(appName, alert);
+      const info = await transport.sendMail({ from, to, subject, text, html });
+      if (live) log.info({ to, sync: alert.syncName, messageId: info.messageId }, 'Sync recovery email sent');
+      else log.info({ to, sync: alert.syncName }, 'Sync recovery email (dev, not delivered)');
     },
     async verify() {
       if (!live) return false;

@@ -10,8 +10,9 @@ import {
   type SyncReport,
 } from '@watchbridge/core';
 import type { Db } from '../db/client.js';
-import { syncs, syncRuns, type Sync, type SyncRun } from '../db/schema.js';
+import { syncs, syncRuns, users, type Sync, type SyncRun } from '../db/schema.js';
 import type { ConnectionService } from '../connections/service.js';
+import type { Mailer } from '../mail/mailer.js';
 import { DeliveriesStore } from './deliveries.js';
 
 const log = createLogger('runner');
@@ -81,6 +82,9 @@ export class SyncRunner {
     private readonly connections: ConnectionService,
     /** Hours between forced full re-reads that ignore the delta cursor. 0 disables it. */
     private readonly reconcileIntervalHours = 168,
+    /** Optional alerting. When set, a scheduled run emails the owner on the first
+     *  failure and again on recovery — transitions only, never per-error. */
+    private readonly alerts?: { mailer: Mailer; appUrl: string },
   ) {
     this.deliveries = new DeliveriesStore(db);
   }
@@ -229,9 +233,58 @@ export class SyncRunner {
       .where(eq(syncs.id, sync.id));
 
     this.logRun(sync, trigger, outcome, now.getTime() - startedAt.getTime(), guards);
+    await this.maybeAlert(sync, trigger, outcome);
 
     const [run] = await this.db.orm.select().from(syncRuns).where(eq(syncRuns.id, id)).limit(1);
     return { ...outcome, run };
+  }
+
+  /**
+   * Email the owner when a scheduled sync crosses between working and failing.
+   *
+   * Only transitions are sent: the first failure after a good run, and the first
+   * success after a failure. A sync that stays broken emails once, not every
+   * hour. Manual runs never alert — the user is already watching. A mail failure
+   * is logged and swallowed so it can never break the run itself.
+   */
+  private async maybeAlert(sync: Sync, trigger: Trigger, outcome: RunOutcome): Promise<void> {
+    if (!this.alerts || trigger !== 'scheduled') return;
+    const wasFailing = sync.lastRunStatus === 'error' || sync.lastRunStatus === 'partial';
+    const isFailing = outcome.status === 'error' || outcome.status === 'partial';
+
+    if (isFailing === wasFailing) return; // no transition, stay quiet
+
+    const [owner] = await this.db.orm
+      .select({ email: users.email })
+      .from(users)
+      .where(eq(users.id, sync.userId))
+      .limit(1);
+    if (!owner?.email) return;
+    const syncsUrl = `${this.alerts.appUrl}/syncs`;
+
+    try {
+      if (isFailing) {
+        await this.alerts.mailer.sendSyncFailureEmail(owner.email, {
+          syncName: sync.name,
+          reason: this.alertReason(outcome),
+          syncsUrl,
+        });
+      } else {
+        await this.alerts.mailer.sendSyncRecoveryEmail(owner.email, { syncName: sync.name, syncsUrl });
+      }
+    } catch (err) {
+      log.error({ syncId: sync.id, err }, 'Could not send the sync alert email');
+    }
+  }
+
+  /** A short, credential-free reason from the outcome for the alert body. */
+  private alertReason(outcome: RunOutcome): string {
+    if (outcome.error) return outcome.error;
+    for (const report of outcome.reports) {
+      const failed = report.results.find((r) => r.failed > 0 && r.note);
+      if (failed?.note) return failed.note;
+    }
+    return 'One or more data types did not complete.';
   }
 
   /**
