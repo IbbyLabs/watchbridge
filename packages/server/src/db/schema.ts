@@ -184,6 +184,12 @@ export const deliveries = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     /** Provider the item was delivered TO. */
     target: text('target').notNull(),
+    /**
+     * Which kind of delivery this is. History and watchlist track separately —
+     * a title can be both watched and watchlisted, and the two must not collide.
+     * Defaults to 'history' so existing rows keep their meaning.
+     */
+    dataType: text('data_type').notNull().default('history'),
     /** Canonical item-identity key (highest-priority id + S/E). */
     itemKey: text('item_key').notNull(),
     /** JSON MediaRef, to rebuild the match index. */
@@ -191,8 +197,8 @@ export const deliveries = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex('deliveries_scope_key_uniq').on(t.syncId, t.target, t.itemKey),
-    index('deliveries_scope_idx').on(t.syncId, t.target),
+    uniqueIndex('deliveries_scope_key_uniq').on(t.syncId, t.target, t.dataType, t.itemKey),
+    index('deliveries_scope_idx').on(t.syncId, t.target, t.dataType),
   ],
 );
 

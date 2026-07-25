@@ -93,6 +93,18 @@ export interface SyncReport {
    * Not part of the user-facing report.
    */
   deliveredHistory?: MediaRef[];
+  /**
+   * Watchlist items successfully added to the target this run — recorded like
+   * `deliveredHistory` so a target that auto-removes on watch (Trakt) is not
+   * re-added forever. Not part of the user-facing report.
+   */
+  deliveredWatchlist?: MediaRef[];
+  /**
+   * Watchlist items removed from the target this run. The caller drops these
+   * from the delivery ledger so the same title can be delivered again if it
+   * later returns to the source.
+   */
+  removedWatchlist?: MediaRef[];
   startedAt: string;
   finishedAt: string;
 }
@@ -105,6 +117,8 @@ export interface RunSyncOptions {
   since?: string | null;
   /** Items already delivered to the target on prior runs; treated as present. */
   deliveredHistory?: MediaRef[];
+  /** Watchlist items already delivered to the target on prior runs. */
+  deliveredWatchlist?: MediaRef[];
   /** Per-sync scope controls; unset means sync everything. */
   filters?: SyncFilters;
   /** For ratings: the provider whose rating wins a conflict. */
@@ -132,6 +146,8 @@ export async function runSync(
   const startedAt = now().toISOString();
   const results: DataTypeReport[] = [];
   let deliveredHistory: MediaRef[] | undefined;
+  let deliveredWatchlist: MediaRef[] | undefined;
+  let removedWatchlist: MediaRef[] | undefined;
 
   // Each data type is isolated. One provider erroring must not discard the work
   // the earlier ones already wrote — in particular the history delivery memory,
@@ -147,9 +163,17 @@ export async function runSync(
       } else if (dataType === 'ratings') {
         results.push(await runRatings(source, target, options.preview, options.ratingsAuthority, options.filters));
       } else if (dataType === 'watchlist') {
-        results.push(
-          await runWatchlist(source, target, options.preview, options.propagateWatchlistRemovals === true, options.filters),
+        const { report, delivered, removed } = await runWatchlist(
+          source,
+          target,
+          options.preview,
+          options.propagateWatchlistRemovals === true,
+          options.filters,
+          options.deliveredWatchlist,
         );
+        results.push(report);
+        if (delivered.length > 0) deliveredWatchlist = delivered;
+        if (removed.length > 0) removedWatchlist = removed;
       } else {
         results.push(emptyReport(dataType, `${dataType} sync is not implemented yet`));
       }
@@ -162,7 +186,17 @@ export async function runSync(
     }
   }
 
-  return { source: source.id, target: target.id, preview: options.preview, results, deliveredHistory, startedAt, finishedAt: now().toISOString() };
+  return {
+    source: source.id,
+    target: target.id,
+    preview: options.preview,
+    results,
+    deliveredHistory,
+    deliveredWatchlist,
+    removedWatchlist,
+    startedAt,
+    finishedAt: now().toISOString(),
+  };
 }
 
 async function runHistory(
@@ -202,17 +236,7 @@ async function runHistory(
     // back (provider id/structure mismatch) would otherwise re-send every run.
     // Anything the target explicitly rejected is left out: recording it would
     // mark it present forever even though it never landed.
-    if (res.failed === 0) {
-      // Match on identity key, not object identity: a provider may hand back
-      // reconstructed refs rather than the exact objects it was given.
-      const rejected = new Set((res.notFoundRefs ?? []).map(itemKey).filter((k): k is string => k !== null));
-      deliveredNow = plan.toAdd
-        .map((e) => e.ref)
-        .filter((ref) => {
-          const key = itemKey(ref);
-          return key === null || !rejected.has(key);
-        });
-    }
+    if (res.failed === 0) deliveredNow = acceptedRefs(plan.toAdd, res);
   }
   log.info({ source: source.id, target: target.id, preview, ...report }, 'history planned');
   return { report, delivered: deliveredNow };
@@ -287,19 +311,21 @@ async function runWatchlist(
   preview: boolean,
   propagateRemovals: boolean,
   filters?: SyncFilters,
-): Promise<DataTypeReport> {
+  delivered: MediaRef[] = [],
+): Promise<{ report: DataTypeReport; delivered: MediaRef[]; removed: MediaRef[] }> {
+  const none = { delivered: [] as MediaRef[], removed: [] as MediaRef[] };
   if (!source.capabilities().watchlist || !source.pullWatchlist) {
-    return emptyReport('watchlist', `${source.id} does not expose a watchlist`);
+    return { report: emptyReport('watchlist', `${source.id} does not expose a watchlist`), ...none };
   }
   if (!target.capabilities().watchlist || !target.pushWatchlist || !target.pullWatchlist) {
-    return emptyReport('watchlist', `${target.id} does not accept watchlist changes`);
+    return { report: emptyReport('watchlist', `${target.id} does not accept watchlist changes`), ...none };
   }
   // Removals are only planned when the target can actually carry them out.
   const canRemove = propagateRemovals && Boolean(target.removeWatchlist);
 
   const [srcAll, tgt] = await Promise.all([source.pullWatchlist(), target.pullWatchlist()]);
   const src = srcAll.filter((e) => includedByFilters(e.ref, filters));
-  const plan = planWatchlistSync(src, tgt, { propagateRemovals: canRemove });
+  const plan = planWatchlistSync(src, tgt, { propagateRemovals: canRemove, alreadyDelivered: delivered });
   const report: DataTypeReport = {
     dataType: 'watchlist',
     planned: plan.toAdd.length + plan.toRemove.length,
@@ -317,8 +343,15 @@ async function runWatchlist(
   withUnmatched(report, plan.unmatched);
   report.note ??= shapeWarning(source.id, 'watchlist', src.length, plan.unmatched.length);
 
+  let deliveredNow: MediaRef[] = [];
+  let removedNow: MediaRef[] = [];
+
   if (!preview && plan.toAdd.length > 0) {
-    applyPush(report, await target.pushWatchlist(plan.toAdd));
+    const res = await target.pushWatchlist!(plan.toAdd);
+    applyPush(report, res);
+    // Record what actually reached the target so a target that auto-removes on
+    // watch is not re-added next run. Anything explicitly rejected is left out.
+    if (res.failed === 0) deliveredNow = acceptedRefs(plan.toAdd, res);
   }
   if (!preview && canRemove && plan.toRemove.length > 0) {
     const res = await target.removeWatchlist!(plan.toRemove);
@@ -326,8 +359,22 @@ async function runWatchlist(
     report.notFound += res.notFound;
     report.failed += res.failed;
     if (res.note) report.note = res.note;
+    // Removed items leave the ledger, so the same title can be delivered again
+    // if it later returns to the source.
+    if (res.failed === 0) removedNow = acceptedRefs(plan.toRemove, res);
   }
-  return report;
+  return { report, delivered: deliveredNow, removed: removedNow };
+}
+
+/** The refs from `events` the target did not explicitly reject. */
+function acceptedRefs(events: Array<{ ref: MediaRef }>, res: PushResult): MediaRef[] {
+  const rejected = new Set((res.notFoundRefs ?? []).map(itemKey).filter((k): k is string => k !== null));
+  return events
+    .map((e) => e.ref)
+    .filter((ref) => {
+      const key = itemKey(ref);
+      return key === null || !rejected.has(key);
+    });
 }
 
 /**

@@ -186,13 +186,22 @@ export interface WatchlistPlan {
  * the target lacks and, only when removals are opted in, removes target items
  * the source no longer lists. Removals are suppressed entirely when the source
  * is empty, so an unreachable or empty source can never clear a target's list.
+ *
+ * `alreadyDelivered` are items this sync has previously added to the target.
+ * They are treated as present for the add decision even when the target no
+ * longer lists them, because some providers (Trakt) auto-remove a watchlist
+ * item the moment it is watched — without this the sync would re-add it every
+ * run and the provider would drop it every run, forever. It does not affect the
+ * removal decision, which still compares the source against the target's
+ * current list.
  */
 export function planWatchlistSync(
   source: WatchlistEvent[],
   target: WatchlistEvent[],
-  opts: { propagateRemovals: boolean },
+  opts: { propagateRemovals: boolean; alreadyDelivered?: MediaRef[] },
 ): WatchlistPlan {
   const targetIndex = MatchIndex.from(target.map((e) => e.ref));
+  for (const ref of opts.alreadyDelivered ?? []) targetIndex.add(ref);
   const seen = new Set<string>();
   const plan: WatchlistPlan = { toAdd: [], toRemove: [], unmatched: [], skippedPresent: 0, skippedDuplicate: 0 };
 

@@ -542,3 +542,47 @@ describe('run reports name the items that did not sync', () => {
     expect(history.notFoundItems).toBeUndefined();
   });
 });
+
+describe('watchlist convergence against a target that auto-removes on watch', () => {
+  const listed = (tmdb: number): WatchlistEvent => ({ ref: { kind: 'movie', ids: { tmdb } } });
+
+  it('records what it added, and does not re-add it once fed back as delivered', async () => {
+    const source = new FakeProvider('simkl', true, false, true);
+    source.watchlist = [listed(550)];
+    // A target that accepts the add but never lists it back (Trakt after a watch).
+    const target = new FakeProvider('trakt', true, false, true);
+    target.pushWatchlist = async (events) => ({ ...emptyPushResult(), added: events.length });
+
+    const first = await runSync(source, target, { dataTypes: ['watchlist'], preview: false, now });
+    const r1 = first.results.find((x) => x.dataType === 'watchlist')!;
+    expect(r1.added).toBe(1);
+    expect(first.deliveredWatchlist).toHaveLength(1);
+
+    // Feed the delivery back (as the runner would) — no re-add, loop broken.
+    const second = await runSync(source, target, {
+      dataTypes: ['watchlist'],
+      preview: false,
+      deliveredWatchlist: first.deliveredWatchlist,
+      now,
+    });
+    const r2 = second.results.find((x) => x.dataType === 'watchlist')!;
+    expect(r2.planned).toBe(0);
+    expect(r2.added).toBe(0);
+    expect(r2.skippedPresent).toBe(1);
+  });
+
+  it('reports removed items so the caller can forget them', async () => {
+    const source = new FakeProvider('simkl', true, false, true);
+    source.watchlist = [listed(550)]; // source dropped 680
+    const target = new FakeProvider('trakt', true, false, true);
+    target.watchlist = [listed(550), listed(680)];
+
+    const report = await runSync(source, target, {
+      dataTypes: ['watchlist'],
+      preview: false,
+      propagateWatchlistRemovals: true,
+      now,
+    });
+    expect(report.removedWatchlist?.map((r) => r.ids.tmdb)).toEqual([680]);
+  });
+})

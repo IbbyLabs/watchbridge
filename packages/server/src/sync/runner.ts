@@ -107,6 +107,21 @@ export class SyncRunner {
     return this.execute(sync, 'preview');
   }
 
+  /** Persist what a run delivered to (and removed from) a target's ledger. */
+  private async persistDeliveries(sync: Sync, target: string, report: SyncReport): Promise<void> {
+    if (report.deliveredHistory?.length) {
+      await this.deliveries.record(sync.id, sync.userId, target, report.deliveredHistory);
+    }
+    if (report.deliveredWatchlist?.length) {
+      await this.deliveries.record(sync.id, sync.userId, target, report.deliveredWatchlist, 'watchlist');
+    }
+    // Removed watchlist items leave the ledger so they can be delivered again if
+    // they later return to the source.
+    if (report.removedWatchlist?.length) {
+      await this.deliveries.forget(sync.id, target, report.removedWatchlist, 'watchlist');
+    }
+  }
+
   async execute(sync: Sync, trigger: Trigger): Promise<RunOutcome> {
     const preview = trigger === 'preview';
     const startedAt = new Date();
@@ -134,6 +149,7 @@ export class SyncRunner {
     const key = (provider: string) => `${provider}:history`;
     const reports: SyncReport[] = [];
     const forwardDelivered = await this.deliveries.load(sync.id, sync.target);
+    const forwardWatchlist = await this.deliveries.load(sync.id, sync.target, 'watchlist');
     // What the correctness machinery actually had to work with this run. A guard
     // reading an empty or missing input is indistinguishable from a guard that is
     // simply not needed, and stays "disabled" without anyone noticing.
@@ -154,12 +170,11 @@ export class SyncRunner {
         // On a reconciliation run, drop the cursor so the source re-reads everything.
         since: fullReconcile ? null : (cursors[key(sync.source)] ?? null),
         deliveredHistory: forwardDelivered,
+        deliveredWatchlist: forwardWatchlist,
       });
       reports.push(forward);
       advanceCursor(cursors, key(sync.source), source, forward);
-      if (!preview && forward.deliveredHistory?.length) {
-        await this.deliveries.record(sync.id, sync.userId, sync.target, forward.deliveredHistory);
-      }
+      if (!preview) await this.persistDeliveries(sync, sync.target, forward);
 
       if (sync.direction === 'two_way') {
         const back = await runSync(target, source, {
@@ -170,12 +185,11 @@ export class SyncRunner {
           propagateWatchlistRemovals,
           since: fullReconcile ? null : (cursors[key(sync.target)] ?? null),
           deliveredHistory: await this.deliveries.load(sync.id, sync.source),
+          deliveredWatchlist: await this.deliveries.load(sync.id, sync.source, 'watchlist'),
         });
         reports.push(back);
         advanceCursor(cursors, key(sync.target), target, back);
-        if (!preview && back.deliveredHistory?.length) {
-          await this.deliveries.record(sync.id, sync.userId, sync.source, back.deliveredHistory);
-        }
+        if (!preview) await this.persistDeliveries(sync, sync.source, back);
       }
     } catch (err) {
       // Stored on the run and shown to the user, so it has to read as a sentence
@@ -204,9 +218,14 @@ export class SyncRunner {
   ): Promise<RunOutcome> {
     if (trigger === 'preview') return outcome;
 
-    // deliveredHistory is convergence bookkeeping, not part of the user-facing
-    // report — drop it from what's stored and returned.
-    outcome = { ...outcome, reports: outcome.reports.map(({ deliveredHistory: _d, ...r }) => r) };
+    // The delivery/removal ref lists are convergence bookkeeping, not part of the
+    // user-facing report — drop them from what's stored and returned.
+    outcome = {
+      ...outcome,
+      reports: outcome.reports.map(
+        ({ deliveredHistory: _d, deliveredWatchlist: _w, removedWatchlist: _r, ...r }) => r,
+      ),
+    };
 
     const now = new Date();
     const id = randomUUID();
