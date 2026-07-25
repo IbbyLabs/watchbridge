@@ -1,0 +1,1 @@
+ALTER TABLE "syncs" ADD COLUMN "last_run_status" text;

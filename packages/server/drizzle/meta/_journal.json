@@ -1,0 +1,104 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1783614630906,
+      "tag": "0000_minor_paper_doll",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783616503602,
+      "tag": "0001_tidy_hiroim",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783617004771,
+      "tag": "0002_cuddly_ricochet",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783618917567,
+      "tag": "0003_opposite_jean_grey",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783622914566,
+      "tag": "0004_pretty_warstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783641137905,
+      "tag": "0005_strong_typhoid_mary",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784844781545,
+      "tag": "0006_burly_victor_mancha",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784849605673,
+      "tag": "0007_nervous_snowbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784889615906,
+      "tag": "0008_green_skullbuster",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784890386352,
+      "tag": "0009_loud_flatman",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784895465635,
+      "tag": "0010_yellow_tarot",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784939135366,
+      "tag": "0011_scrub_leaked_apikeys_from_errors",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1784939262827,
+      "tag": "0012_add_last_full_reconcile",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1784945847267,
+      "tag": "0013_deliveries_data_type",
+      "breakpoints": true
+    }
+  ]
+}

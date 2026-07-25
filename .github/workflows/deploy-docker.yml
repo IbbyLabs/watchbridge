@@ -1,0 +1,148 @@
+name: Build and Publish Docker Images
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build
+        required: true
+        type: string
+
+env:
+  IMAGE: ghcr.io/ibbylabs/watchbridge
+
+jobs:
+  build:
+    name: build (${{ matrix.suffix }})
+    permissions:
+      packages: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            suffix: amd64
+          # Native ARM runner — no QEMU emulation.
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            suffix: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Resolve version
+        id: ver
+        env:
+          REF: ${{ inputs.ref || github.ref_name }}
+        run: echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            APP_VERSION=${{ steps.ver.outputs.version }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.suffix }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.suffix }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.suffix }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  merge:
+    name: Merge manifest
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derive tags from the resolved ref, not github.ref: the release-please
+      # dispatch path is a workflow_dispatch, where github.ref is refs/heads/main
+      # (so metadata-action's semver parse would find no version and emit no tags).
+      - name: Compute tags
+        id: ver
+        env:
+          REF: ${{ inputs.ref || github.ref_name }}
+        run: |
+          v="${REF#v}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "minor=${v%.*}" >> "$GITHUB_OUTPUT"
+          echo "major=${v%%.*}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Create and push manifest list
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          MINOR: ${{ steps.ver.outputs.minor }}
+          MAJOR: ${{ steps.ver.outputs.major }}
+        run: |
+          images=$(for d in /tmp/digests/*; do echo "${IMAGE}@$(cat "$d")"; done)
+          docker buildx imagetools create \
+            -t "${IMAGE}:${VERSION}" \
+            -t "${IMAGE}:${MINOR}" \
+            -t "${IMAGE}:${MAJOR}" \
+            -t "${IMAGE}:latest" \
+            $images
+
+      - name: Inspect
+        run: docker buildx imagetools inspect "${IMAGE}:${{ steps.ver.outputs.version }}"
+
+  release:
+    name: GitHub release
+    needs: merge
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish release with generated changelog
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: true

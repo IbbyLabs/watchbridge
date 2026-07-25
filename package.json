@@ -1,0 +1,25 @@
+{
+  "name": "watchbridge",
+  "version": "0.8.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=11"
+  },
+  "packageManager": "pnpm@11.10.0",
+  "scripts": {
+    "build": "pnpm -F @watchbridge/core build && pnpm -F @watchbridge/server build && pnpm -F @watchbridge/web build",
+    "dev": "concurrently -n server,web -c blue,magenta \"pnpm -F @watchbridge/server dev\" \"pnpm -F @watchbridge/web dev\"",
+    "start": "node packages/server/dist/index.js",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write \"packages/**/*.{ts,tsx}\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3"
+  }
+}
