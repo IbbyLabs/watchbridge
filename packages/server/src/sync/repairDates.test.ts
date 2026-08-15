@@ -344,3 +344,68 @@ describe('two targets with the same item pending', () => {
     expect(await repair.pending('s1', 'other')).toHaveLength(1);
   });
 });
+
+// The whole repair cannot fit in one HTTP request: at one write a second a large
+// history outlasts any proxy. A call does a bounded piece and says what is left.
+describe('a repair too large for one request', () => {
+  it('corrects up to its budget and reports the rest as remaining', async () => {
+    await db.orm.delete(deliveries);
+    const refs = Array.from({ length: 7 }, (_, i) => ({ kind: 'movie' as const, ids: { tmdb: 200 + i } }));
+    for (const [i, ref] of refs.entries()) {
+      await db.orm.insert(deliveries).values({
+        id: `b${i}`,
+        syncId: 's1',
+        userId: 'u1',
+        target: 'simkl',
+        dataType: 'history',
+        itemKey: itemKey(ref)!,
+        ref: JSON.stringify(ref),
+        createdAt: DELIVERED_AT,
+      });
+    }
+
+    const store = new Map(refs.map((r) => [itemKey(r)!, WRONG]));
+    const target = {
+      async pullHistory(): Promise<WatchEvent[]> {
+        return refs.filter((r) => store.has(itemKey(r)!)).map((r) => ({ ref: r, watchedAt: store.get(itemKey(r)!)! }));
+      },
+      async removeHistory(events: WatchEvent[]) {
+        for (const e of events) store.delete(itemKey(e.ref)!);
+        return { added: 1, skipped: 0, failed: 0, notFound: 0 };
+      },
+      async pushHistory(events: WatchEvent[]) {
+        for (const e of events) store.set(itemKey(e.ref)!, e.watchedAt!);
+        return { added: 1, skipped: 0, failed: 0, notFound: 0 };
+      },
+    };
+    const source = {
+      async pullHistory(): Promise<WatchEvent[]> {
+        return refs.map((r) => ({ ref: r, watchedAt: RIGHT }));
+      },
+      async pushHistory() {
+        return { added: 0, skipped: 0, failed: 0, notFound: 0 };
+      },
+    };
+    const repair = new DateRepair(
+      { async clientFor(_u: string, p: string) { return p === 'simkl' ? target : source; } } as never,
+      new DeliveriesStore(db),
+      db,
+    );
+
+    const first = await repair.run('u1', 's1', 'trakt', 'simkl', 3);
+    expect(first.counts.repaired).toBe(3);
+    expect(first.counts.remaining).toBe(4);
+
+    const second = await repair.run('u1', 's1', 'trakt', 'simkl', 3);
+    expect(second.counts.repaired).toBe(3);
+    expect(second.counts.remaining).toBe(1);
+
+    const third = await repair.run('u1', 's1', 'trakt', 'simkl', 3);
+    expect(third.counts.repaired).toBe(1);
+    expect(third.counts.remaining).toBe(0);
+
+    // Everything ends up corrected, and nothing is left half-done.
+    expect([...store.values()].every((v) => v === RIGHT)).toBe(true);
+    expect(await repair.pending('s1', 'simkl')).toEqual([]);
+  });
+});

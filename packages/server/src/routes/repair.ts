@@ -48,7 +48,8 @@ export function repairRoutes(app: FastifyInstance, db: Db, connections: Connecti
       results.push({ ...result, syncId: sync.id, name: sync.name });
       log.info({ userId, sync: sync.id, target: sync.target, counts: result.counts }, 'Ran a watch-date repair');
     }
-    return { results, explanation: explain(results) };
+    const remaining = results.reduce((n, r) => n + r.counts.remaining, 0);
+    return { results, remaining, explanation: explain(results) };
   });
 }
 
@@ -79,8 +80,9 @@ export function explain(plans: RepairPlan[]): string[] {
       out.push(`Nothing on ${p.target} needs correcting.`);
       continue;
     }
+    const tail = p.counts.remaining > 0 ? `, ${p.counts.remaining} still to go` : '';
     out.push(
-      `${p.target}: ${p.counts.repaired} of ${p.counts.candidates} corrected, ` +
+      `${p.target}: ${p.counts.repaired} of ${p.counts.candidates} corrected${tail}, ` +
         `${p.counts.skipped} left alone because they are dated outside the import.`,
     );
   }

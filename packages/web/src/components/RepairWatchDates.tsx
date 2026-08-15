@@ -22,6 +22,7 @@ interface Plan {
     repaired: number;
     skipped: number;
     failed: number;
+    remaining: number;
     stoppedBecause?: string;
   };
 }
@@ -29,6 +30,8 @@ interface Plan {
 interface Answer {
   plans?: Plan[];
   results?: Plan[];
+  /** Corrections the last call did not reach. Zero means it is finished. */
+  remaining?: number;
   explanation: string[];
 }
 
@@ -36,6 +39,7 @@ export function RepairWatchDates() {
   const [checked, setChecked] = useState<Answer | null>(null);
   const [done, setDone] = useState<Answer | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const plans = checked?.plans ?? [];
@@ -55,14 +59,32 @@ export function RepairWatchDates() {
     }
   };
 
+  /**
+   * Each call corrects a bounded number and says what is left, because the whole
+   * repair cannot fit inside one request — Simkl accepts about one write a
+   * second, and a large history would outlast any proxy between here and the
+   * server. So this asks repeatedly until nothing is left.
+   */
   const run = async () => {
     setBusy(true);
     setError(null);
+    let corrected = 0;
     try {
-      setDone(await api.post<Answer>('/api/repair/watch-dates'));
-      setChecked(null);
+      for (;;) {
+        const answer = await api.post<Answer>('/api/repair/watch-dates');
+        corrected += (answer.results ?? []).reduce((n, r) => n + r.counts.repaired, 0);
+        setProgress(corrected);
+        setDone(answer);
+        setChecked(null);
+        const stopped = (answer.results ?? []).some((r) => r.counts.stoppedBecause);
+        if (stopped || !answer.remaining) break;
+      }
     } catch {
-      setError('The repair stopped. Nothing else was changed — you can run it again.');
+      setError(
+        corrected > 0
+          ? `Stopped after correcting ${corrected}. The rest are untouched — press it again to carry on.`
+          : 'Could not start. Nothing was changed — try again in a moment.',
+      );
     } finally {
       setBusy(false);
     }
@@ -99,6 +121,10 @@ export function RepairWatchDates() {
               </p>
             )}
           </div>
+        )}
+
+        {busy && progress > 0 && (
+          <p className="mt-4 text-sm text-muted">{progress} corrected so far…</p>
         )}
 
         {done && (

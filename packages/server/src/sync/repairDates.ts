@@ -32,6 +32,17 @@ const log = createLogger('repair-dates');
  */
 const VERIFY_EVERY = 25;
 
+/**
+ * Items corrected per request.
+ *
+ * The whole repair cannot run inside one HTTP request: at Simkl's one write a
+ * second, a couple of thousand corrections is most of an hour, and nothing
+ * between a browser and this server holds a request open that long. So a call
+ * does a bounded piece and reports what is left, and the page asks again.
+ * Twenty is comfortably inside the shortest proxy timeout we have to survive.
+ */
+const PER_REQUEST = 20;
+
 /** How far a stored date may sit from the delivery for us to own it. */
 const WINDOW_MS = 60 * 60 * 1000;
 
@@ -46,6 +57,8 @@ export interface RepairCounts {
   /** Dated outside the window: a watch the person had, left alone. */
   skipped: number;
   failed: number;
+  /** Corrections this call did not reach. Zero means the target is finished. */
+  remaining: number;
   /** Set when the run stopped early; the reason a person should be shown. */
   stoppedBecause?: string;
 }
@@ -58,7 +71,7 @@ export interface RepairPlan {
 }
 
 function emptyCounts(): RepairCounts {
-  return { delivered: 0, examined: 0, candidates: 0, repaired: 0, skipped: 0, failed: 0 };
+  return { delivered: 0, examined: 0, candidates: 0, repaired: 0, skipped: 0, failed: 0, remaining: 0 };
 }
 
 /**
@@ -153,7 +166,13 @@ export class DateRepair {
    * corrected and then a halt is recoverable; two thousand streamed through with
    * a silent failure at item forty is not.
    */
-  async run(userId: string, syncId: string, source: string, target: string): Promise<RepairPlan> {
+  async run(
+    userId: string,
+    syncId: string,
+    source: string,
+    target: string,
+    budget: number = PER_REQUEST,
+  ): Promise<RepairPlan> {
     const counts = emptyCounts();
     const ledger = await this.deliveries.loadDated(syncId, target);
     counts.delivered = ledger.length;
@@ -198,6 +217,13 @@ export class DateRepair {
         continue;
       }
       counts.candidates++;
+
+      // Past this call's share. Counted so the page knows to ask again rather
+      // than reporting a finished repair that is not finished.
+      if (counts.repaired + written.length >= budget) {
+        counts.remaining++;
+        continue;
+      }
 
       const outcome = await this.repairOne(userId, syncId, target, client, entry.ref, key, wanted);
       if (outcome !== 'written') {
