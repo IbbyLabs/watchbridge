@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/IbbyLabs/watchbridge/compare/v0.9.0...v0.9.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* **server:** register the repair routes so the page can reach them ([d41bbd7](https://github.com/IbbyLabs/watchbridge/commit/d41bbd76ac9ef22d294f78500fefa6aade2ab68a))
+
 ## [0.9.0](https://github.com/IbbyLabs/watchbridge/compare/v0.8.0...v0.9.0) (2026-08-15)
 
 
