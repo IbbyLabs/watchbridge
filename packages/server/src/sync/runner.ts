@@ -57,6 +57,12 @@ function parseFilters(raw: string | null): SyncFilters | undefined {
   }
 }
 
+/** Requests a source reports spending, for providers that count them. */
+export function readRequestCount(source: unknown): number | undefined {
+  const n = (source as { lastPullRequests?: unknown })?.lastPullRequests;
+  return typeof n === 'number' ? n : undefined;
+}
+
 /**
  * Advance a delta cursor only when the source exposes a newer one (Simkl) AND
  * the history push had no failures — so a transient error never skips items.
@@ -159,6 +165,10 @@ export class SyncRunner {
       filters: filters ? 'applied' : 'none',
       watchlistRemovals: propagateWatchlistRemovals ? 'on' : 'off',
       read: fullReconcile ? 'full' : 'delta',
+      // What the source's history pull cost in requests. Rate limits are per
+      // application credential, so this is the number a cursor reduces and the
+      // only way to tell afterwards whether it did.
+      sourceRequests: readRequestCount(source),
     };
     try {
       const forward = await runSync(source, target, {

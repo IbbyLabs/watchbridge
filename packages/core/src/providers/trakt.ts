@@ -105,6 +105,12 @@ const toIds = (b: TraktIdBlock): ExternalIds => ({
 
 export class TraktClient {
   readonly id = 'trakt' as const;
+  /** Newest history activity seen on the last pull, for the next run's cursor. */
+  lastActivityAll?: string;
+  /** Set when the cursor said nothing changed, so an empty pull is not a loss. */
+  lastPullSkipped = false;
+  /** GETs the last pull cost, so the saving is measurable rather than asserted. */
+  lastPullRequests = 0;
   private readonly http: HttpClient;
   private tokens?: TraktTokens;
 
@@ -260,6 +266,24 @@ export class TraktClient {
 
   // ── Reads ────────────────────────────────────────────────────────
 
+  /**
+   * The newest history timestamp, or undefined if the call fails. A failure
+   * falls through to a full pull rather than skipping one: a missed cursor costs
+   * requests, a wrongly-skipped pull costs a user their sync.
+   */
+  private async historyActivityAt(): Promise<string | undefined> {
+    try {
+      this.lastPullRequests++;
+      const acts = await this.getLastActivities();
+      const seen = [acts?.episodes?.watched_at, acts?.movies?.watched_at].filter(
+        (v): v is string => typeof v === 'string',
+      );
+      return seen.length === 0 ? undefined : seen.sort().at(-1);
+    } catch {
+      return undefined;
+    }
+  }
+
   getLastActivities(): Promise<Record<string, Record<string, string>>> {
     return this.authed((auth) => this.http.get('/sync/last_activities', { headers: auth }));
   }
@@ -277,7 +301,26 @@ export class TraktClient {
     return { username: r.user?.username, uuid: r.user?.ids?.uuid };
   }
 
-  async pullHistory(_since?: string | null): Promise<WatchEvent[]> {
+  /**
+   * `/sync/last_activities` carries a timestamp per section, so a user whose
+   * history has not moved costs one request instead of a full re-page of the
+   * library. Rate limits are per application credential, so that cost is shared
+   * by everyone using the app rather than borne by the user who has it.
+   *
+   * Same shape as the Simkl client: read the cursor, skip when it matches, and
+   * report the skip so an empty result is not mistaken for an empty library.
+   */
+  async pullHistory(since?: string | null): Promise<WatchEvent[]> {
+    this.lastPullRequests = 0;
+    this.lastPullSkipped = false;
+
+    const activity = await this.historyActivityAt();
+    if (activity) this.lastActivityAll = activity;
+    if (since && activity && since === activity) {
+      this.lastPullSkipped = true;
+      return [];
+    }
+
     const movies = await this.pageAll<TraktHistoryMovie>('/sync/history/movies');
     const episodes = await this.pageAll<TraktHistoryEpisode>('/sync/history/episodes');
     const out: WatchEvent[] = [];
@@ -552,6 +595,7 @@ export class TraktClient {
     let previousFirstRow: string | undefined;
 
     for (;;) {
+      this.lastPullRequests++;
       const rows = await this.authed<T[]>((auth) =>
         this.http.get(`${path}${sep}page=${page}&limit=${limit}`, { headers: auth }),
       );

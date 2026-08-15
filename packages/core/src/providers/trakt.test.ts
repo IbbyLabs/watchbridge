@@ -373,3 +373,54 @@ describe('Trakt watchlist', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+// Rate limits are per application credential, so a full re-page of one user's
+// library is a cost every other user shares. The cursor is what avoids it.
+describe('TraktClient history cursor', () => {
+  it('skips the pull when the activity timestamp has not moved', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities')
+        ? { body: { episodes: { watched_at: '2026-08-15T10:00:00Z' }, movies: { watched_at: '2026-08-14T10:00:00Z' } } }
+        : { body: [] },
+    );
+    const c = new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
+
+    const out = await c.pullHistory('2026-08-15T10:00:00Z');
+
+    expect(out).toEqual([]);
+    expect(c.lastPullSkipped).toBe(true);
+    expect(calls.filter((x) => x.url.includes('/sync/history'))).toHaveLength(0);
+    expect(c.lastPullRequests).toBe(1);
+  });
+
+  it('pulls when the timestamp has moved, and reports what it cost', async () => {
+    routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities')
+        ? { body: { episodes: { watched_at: '2026-08-15T12:00:00Z' } } }
+        : { body: [] },
+    );
+    const c = new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
+
+    await c.pullHistory('2026-08-15T10:00:00Z');
+
+    expect(c.lastPullSkipped).toBe(false);
+    expect(c.lastActivityAll).toBe('2026-08-15T12:00:00Z');
+    expect(c.lastPullRequests).toBeGreaterThan(1);
+  });
+
+  // A missing cursor costs requests; a wrongly-skipped pull costs a user their
+  // sync. So a failed activity call falls through to the full pull.
+  // 400 rather than 500: anything at or above 500 is retried with backoff, so a
+  // server error tests the retry path slowly instead of the fallback path.
+  it('pulls in full when the activity call fails', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities') ? { status: 400 } : { body: [] },
+    );
+    const c = new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
+
+    await c.pullHistory('2026-08-15T10:00:00Z');
+
+    expect(c.lastPullSkipped).toBe(false);
+    expect(calls.some((x) => x.url.includes('/sync/history'))).toBe(true);
+  });
+});
