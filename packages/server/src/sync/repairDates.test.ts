@@ -409,3 +409,62 @@ describe('a repair too large for one request', () => {
     expect(await repair.pending('s1', 'simkl')).toEqual([]);
   });
 });
+
+// The item count assumes a write rate. The deadline holds whatever the rate is,
+// which is what makes the bound a guarantee rather than an estimate.
+describe('a chunk that runs slowly', () => {
+  it('stops on elapsed time even when the item count is not reached', async () => {
+    await db.orm.delete(deliveries);
+    const refs = Array.from({ length: 5 }, (_, i) => ({ kind: 'movie' as const, ids: { tmdb: 300 + i } }));
+    for (const [i, ref] of refs.entries()) {
+      await db.orm.insert(deliveries).values({
+        id: `s${i}`,
+        syncId: 's1',
+        userId: 'u1',
+        target: 'simkl',
+        dataType: 'history',
+        itemKey: itemKey(ref)!,
+        ref: JSON.stringify(ref),
+        createdAt: DELIVERED_AT,
+      });
+    }
+
+    const store = new Map(refs.map((r) => [itemKey(r)!, WRONG]));
+    const target = {
+      async pullHistory(): Promise<WatchEvent[]> {
+        return refs.filter((r) => store.has(itemKey(r)!)).map((r) => ({ ref: r, watchedAt: store.get(itemKey(r)!)! }));
+      },
+      async removeHistory(events: WatchEvent[]) {
+        for (const e of events) store.delete(itemKey(e.ref)!);
+        return { added: 1, skipped: 0, failed: 0, notFound: 0 };
+      },
+      async pushHistory(events: WatchEvent[]) {
+        for (const e of events) store.set(itemKey(e.ref)!, e.watchedAt!);
+        return { added: 1, skipped: 0, failed: 0, notFound: 0 };
+      },
+    };
+    const source = {
+      async pullHistory(): Promise<WatchEvent[]> {
+        return refs.map((r) => ({ ref: r, watchedAt: RIGHT }));
+      },
+      async pushHistory() {
+        return { added: 0, skipped: 0, failed: 0, notFound: 0 };
+      },
+    };
+    const repair = new DateRepair(
+      { async clientFor(_u: string, p: string) { return p === 'simkl' ? target : source; } } as never,
+      new DeliveriesStore(db),
+      db,
+    );
+
+    // A clock that jumps half a minute per look, so the deadline lands well
+    // before the budget of a hundred items would.
+    let t = 0;
+    const now = () => (t += 30_000);
+
+    const result = await repair.run('u1', 's1', 'trakt', 'simkl', 100, now);
+
+    expect(result.counts.repaired).toBeLessThan(5);
+    expect(result.counts.remaining).toBeGreaterThan(0);
+  });
+});

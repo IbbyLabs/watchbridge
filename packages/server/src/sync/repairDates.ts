@@ -43,6 +43,16 @@ const VERIFY_EVERY = 25;
  */
 const PER_REQUEST = 20;
 
+/**
+ * Wall clock a call may spend correcting, whichever limit it reaches first.
+ *
+ * The item count alone assumes a write rate. One slow spell, a retry, or a
+ * larger verifying read and twenty items outlast the request — the failure this
+ * bound exists to prevent. The deadline holds regardless of how slow the
+ * provider is, which makes the count an optimisation rather than the guarantee.
+ */
+const PER_REQUEST_MS = 60_000;
+
 /** How far a stored date may sit from the delivery for us to own it. */
 const WINDOW_MS = 60 * 60 * 1000;
 
@@ -172,7 +182,10 @@ export class DateRepair {
     source: string,
     target: string,
     budget: number = PER_REQUEST,
+    /** Injectable so a test can drive the deadline without waiting for it. */
+    now: () => number = Date.now,
   ): Promise<RepairPlan> {
+    const deadline = now() + PER_REQUEST_MS;
     const counts = emptyCounts();
     const ledger = await this.deliveries.loadDated(syncId, target);
     counts.delivered = ledger.length;
@@ -220,7 +233,7 @@ export class DateRepair {
 
       // Past this call's share. Counted so the page knows to ask again rather
       // than reporting a finished repair that is not finished.
-      if (counts.repaired + written.length >= budget) {
+      if (counts.repaired + written.length >= budget || now() >= deadline) {
         counts.remaining++;
         continue;
       }

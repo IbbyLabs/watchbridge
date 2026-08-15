@@ -78,6 +78,19 @@ export function RepairWatchDates() {
         setChecked(null);
         const stopped = (answer.results ?? []).some((r) => r.counts.stoppedBecause);
         if (stopped || !answer.remaining) break;
+
+        // A chunk that corrected nothing, reported no reason, and still claims
+        // work remains would loop forever. Nothing in the server does that
+        // today; this stops the case neither of us has thought of, because the
+        // loop writes to somebody's history.
+        const movedThisChunk = (answer.results ?? []).reduce((n, r) => n + r.counts.repaired, 0);
+        if (movedThisChunk === 0) {
+          setError(
+            `Stopped after correcting ${corrected}. The last attempt changed nothing and did not say why — ` +
+              `nothing further was tried.`,
+          );
+          break;
+        }
       }
     } catch {
       setError(
