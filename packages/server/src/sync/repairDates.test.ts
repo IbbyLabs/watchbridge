@@ -517,3 +517,30 @@ describe('an item left removed by an earlier attempt', () => {
     expect(line).toContain('Running this restores it first');
   });
 });
+
+// Deleting and re-adding a connection empties the ledger. The intent survives
+// that on purpose — so the restore has to happen without a ledger, or keeping
+// the record alive achieves nothing.
+describe('an empty ledger with something still removed', () => {
+  it('puts the item back, rather than only offering to', async () => {
+    await db.orm.delete(deliveries);
+    await db.orm.delete(repairIntents);
+    await db.orm.insert(repairIntents).values({
+      id: 'p3',
+      userId: 'u1',
+      syncId: 's1',
+      target: 'simkl',
+      itemKey: itemKey(MOVIE)!,
+      ref: JSON.stringify(MOVIE),
+      watchedAt: RIGHT,
+    });
+
+    const target = fakeProvider(null);
+    const repair = repairWith(target, fakeProvider(RIGHT));
+    const result = await repair.run('u1', 's1', 'trakt', 'simkl');
+
+    expect(target.stored).toBe(RIGHT);
+    expect(result.counts.repaired).toBe(1);
+    expect(await repair.pending('s1', 'simkl')).toEqual([]);
+  });
+});

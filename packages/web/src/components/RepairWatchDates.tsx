@@ -156,7 +156,9 @@ export function RepairWatchDates() {
           <Button variant="secondary" loading={busy} onClick={check}>
             Check my history
           </Button>
-          {(toFix > 0 || toRestore > 0) && !anyUnidentifiable && (
+          {/* A restore needs no ledger, so it stays available when nothing is
+              identifiable — it is the one useful action such a person has. */}
+          {(toRestore > 0 || (toFix > 0 && !anyUnidentifiable)) && (
             <Button loading={busy} onClick={run}>
               {toRestore > 0 && toFix === 0
                 ? `Restore ${toRestore} ${toRestore === 1 ? 'item' : 'items'}`

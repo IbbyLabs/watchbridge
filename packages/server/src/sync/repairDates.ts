@@ -196,30 +196,37 @@ export class DateRepair {
   ): Promise<RepairPlan> {
     const deadline = now() + PER_REQUEST_MS;
     const counts = emptyCounts();
-    const ledger = await this.deliveries.loadDated(syncId, target);
-    counts.delivered = ledger.length;
-    if (ledger.length === 0) return { target, counts, unidentifiable: true };
 
     const client = await this.connections.clientFor(userId, target as never);
     if (!client) {
       counts.stoppedBecause = `${target} is not connected`;
       return { target, counts, unidentifiable: false };
     }
-    const current = await this.readCurrent(userId, target);
-    const sourceDates = await this.readCurrent(userId, source);
-    if (!current || !sourceDates) {
-      counts.stoppedBecause = 'could not read both sides, so nothing was changed';
-      return { target, counts, unidentifiable: false };
-    }
 
-    // Anything removed by an earlier run and not put back comes first: it is
-    // the only state where a person is missing a watch rather than holding a
-    // wrong date, so it is worse than everything below it.
+    // Anything removed by an earlier run and not put back comes first, and
+    // before the ledger is even consulted. It is the only state where a person
+    // is missing a watch rather than holding a wrong date, and an intent
+    // carries the ref and the date itself — so it neither needs the ledger nor
+    // should be blocked by the ledger being gone.
     const resumed = await this.finishPending(userId, syncId, target, client);
     counts.repaired += resumed.repaired;
     counts.failed += resumed.failed;
     if (resumed.stoppedBecause) {
       counts.stoppedBecause = resumed.stoppedBecause;
+      return { target, counts, unidentifiable: false };
+    }
+    counts.pendingRestores = (await this.pending(syncId, target)).length;
+
+    const ledger = await this.deliveries.loadDated(syncId, target);
+    counts.delivered = ledger.length;
+    // Without a record of what we sent, our wrong dates cannot be told from
+    // real watches, so no date is corrected. Restores above already happened.
+    if (ledger.length === 0) return { target, counts, unidentifiable: true };
+
+    const current = await this.readCurrent(userId, target);
+    const sourceDates = await this.readCurrent(userId, source);
+    if (!current || !sourceDates) {
+      counts.stoppedBecause = 'could not read both sides, so nothing was changed';
       return { target, counts, unidentifiable: false };
     }
 
