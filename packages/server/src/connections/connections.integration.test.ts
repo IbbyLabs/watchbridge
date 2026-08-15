@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { SecretBox, loadConfig, type AppConfig } from '@watchbridge/core';
+import { itemKey, SecretBox, loadConfig, type AppConfig } from '@watchbridge/core';
 import type { FastifyInstance } from 'fastify';
 import { createDb, type Db } from '../db/client.js';
 import { connections, deliveries, syncs } from '../db/schema.js';
@@ -294,7 +294,7 @@ describe('reconnecting to a different account discards what was keyed to the old
       syncId: id,
       userId,
       target: 'pmdb',
-      itemKey: 'movie:tmdb:550',
+      itemKey: itemKey({ kind: 'movie', ids: { tmdb: 550 } })!,
       ref: JSON.stringify({ kind: 'movie', ids: { tmdb: 550 } }),
     });
     return id;

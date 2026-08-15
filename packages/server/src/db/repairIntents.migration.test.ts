@@ -1,3 +1,4 @@
+import { itemKey } from '@watchbridge/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { createDb, type Db } from './client.js';
@@ -39,7 +40,7 @@ async function seed(): Promise<void> {
     userId: 'u1',
     syncId: 's1',
     target: 'simkl',
-    itemKey: 'tmdb:550',
+    itemKey: itemKey({ kind: 'movie', ids: { tmdb: 550 } })!,
     ref: '{"kind":"movie","ids":{"tmdb":550}}',
     watchedAt: '2019-05-19T20:00:00Z',
   });

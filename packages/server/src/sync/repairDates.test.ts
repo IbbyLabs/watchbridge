@@ -3,6 +3,7 @@ import type { MediaRef, WatchEvent } from '@watchbridge/core';
 import { createDb, type Db } from '../db/client.js';
 import { deliveries, repairIntents, syncs, users } from '../db/schema.js';
 import { DeliveriesStore } from './deliveries.js';
+import { itemKey } from '@watchbridge/core';
 import { DateRepair, looksDelivered } from './repairDates.js';
 
 /**
@@ -80,7 +81,7 @@ beforeEach(async () => {
     userId: 'u1',
     target: 'simkl',
     dataType: 'history',
-    itemKey: 'movie:tmdb:550',
+    itemKey: itemKey(MOVIE)!,
     ref: JSON.stringify(MOVIE),
     createdAt: DELIVERED_AT,
   });
@@ -174,7 +175,7 @@ describe('a provider that updates in place', () => {
       userId: 'u1',
       target: 'mdblist',
       dataType: 'history',
-      itemKey: 'movie:tmdb:550',
+      itemKey: itemKey(MOVIE)!,
       ref: JSON.stringify(MOVIE),
       createdAt: DELIVERED_AT,
     });
@@ -267,7 +268,7 @@ describe('how often it re-reads the account', () => {
         userId: 'u1',
         target: 'simkl',
         dataType: 'history',
-        itemKey: `movie:tmdb:${100 + i}`,
+        itemKey: itemKey(ref)!,
         ref: JSON.stringify(ref),
         createdAt: DELIVERED_AT,
       });
@@ -329,7 +330,7 @@ describe('two targets with the same item pending', () => {
         userId: 'u1',
         syncId: 's1',
         target,
-        itemKey: 'movie:tmdb:550',
+        itemKey: itemKey(MOVIE)!,
         ref: JSON.stringify(MOVIE),
         watchedAt: RIGHT,
       });
