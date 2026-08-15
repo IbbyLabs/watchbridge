@@ -30,15 +30,15 @@ interface WatchedWriteResponse {
   errors?: unknown[];
 }
 
-/**
- * Split a write so no request carries more show entries than MDBList accepts.
- * Movies ride with the first batch; they have no cap of their own.
- */
 /** Identity key for grouping, mirroring the id priority the API matches on. */
 function idKey(ids: ScrobbleIds): string {
   return ids.imdb ? `imdb:${ids.imdb}` : `tmdb:${ids.tmdb}`;
 }
 
+/**
+ * Split a write so no request carries more show entries than MDBList accepts.
+ * Movies ride with the first batch; they have no cap of their own.
+ */
 function* batches(
   movies: Array<Record<string, unknown>>,
   shows: Array<Record<string, unknown>>,

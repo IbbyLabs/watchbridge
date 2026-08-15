@@ -118,3 +118,45 @@ describe('an item with no usable id never collides with another', () => {
     );
   });
 });
+
+// mdblist's read used to return tmdb only and now returns every id the row
+// carries. The ledger stores itemKey, so a ref gaining ids must not change the
+// key of anything already recorded, or every existing delivery looks new and
+// gets pushed again.
+describe('a ref gaining ids', () => {
+  it('keys the same when tmdb is present either way', () => {
+    expect(itemKey({ kind: 'movie', ids: { tmdb: 550, imdb: 'tt0137523', trakt: 70 } })).toBe(
+      itemKey({ kind: 'movie', ids: { tmdb: 550 } }),
+    );
+  });
+
+  it('keys an imdb-only ref rather than refusing it', () => {
+    const key = itemKey({ kind: 'movie', ids: { imdb: 'tt0110413' } });
+    expect(key).toBeTruthy();
+    expect(key).not.toBe(itemKey({ kind: 'movie', ids: { imdb: 'tt0137523' } }));
+  });
+
+  it('still matches across providers when only one side has tmdb', () => {
+    const index = MatchIndex.from([{ kind: 'movie', ids: { tmdb: 550, imdb: 'tt0137523' } }]);
+    expect(index.has({ kind: 'movie', ids: { imdb: 'tt0137523' } })).toBe(true);
+  });
+});
+
+// Stored delivery records hold itemKey, which is the highest-priority id
+// present. Reordering ID_PRIORITY changes the key of every already-recorded
+// item, and the symptom is mass re-pushing rather than an error.
+it('keys on tmdb ahead of every other id', () => {
+  const all = {
+    imdb: 'tt0137523',
+    trakt: 70,
+    tvdb: 234,
+    simkl: 12,
+    anilist: 5,
+    mal: 6,
+    anidb: 7,
+    slug: 'fight-club',
+  };
+  expect(itemKey({ kind: 'movie', ids: { ...all, tmdb: 550 } })).toBe(
+    itemKey({ kind: 'movie', ids: { tmdb: 550 } }),
+  );
+});
