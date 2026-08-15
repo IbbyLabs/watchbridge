@@ -104,39 +104,55 @@ describe('MdblistClient.pullHistory', () => {
 });
 
 describe('MdblistClient.pushHistory', () => {
-  it('scrobbles a stop with the imdb id for a movie', async () => {
-    const calls = routeFetch(() => ({ status: 200 }));
-    const events: WatchEvent[] = [
-      { ref: { kind: 'movie', ids: { imdb: 'tt0137523', tmdb: 550 } }, watchedAt: null },
-    ];
-
-    const res = await new MdblistClient('k').pushHistory(events);
+  it('writes a movie to /sync/watched with its date', async () => {
+    const calls = routeFetch(() => ({ body: { updated: { movies: 1 } } }));
+    const res = await new MdblistClient('k').pushHistory([
+      {
+        ref: { kind: 'movie', ids: { imdb: 'tt0137523', tmdb: 550 } },
+        watchedAt: '2019-05-19T20:00:00Z',
+      },
+    ]);
 
     expect(res.added).toBe(1);
     const post = calls.find((c) => c.method === 'POST')!;
-    expect(post.url).toContain('/scrobble/stop');
+    expect(post.url).toContain('/sync/watched');
     expect(post.body).toMatchObject({
-      movie: { ids: { imdb: 'tt0137523', tmdb: 550 } },
-      progress: 100,
+      movies: [{ ids: { imdb: 'tt0137523', tmdb: 550 }, watched_at: '2019-05-19T20:00:00Z' }],
     });
   });
 
-  it('nests season/episode under show for an episode', async () => {
-    const calls = routeFetch(() => ({ status: 200 }));
+  it('nests season and episode under the show, each with its own date', async () => {
+    const calls = routeFetch(() => ({ body: { updated: { episodes: 2 } } }));
     await new MdblistClient('k').pushHistory([
       {
         ref: { kind: 'episode', ids: { imdb: 'tt0944947' }, season: 1, number: 2 },
-        watchedAt: null,
+        watchedAt: '2019-05-19T20:00:00Z',
+      },
+      {
+        ref: { kind: 'episode', ids: { imdb: 'tt0944947' }, season: 1, number: 3 },
+        watchedAt: '2019-05-20T20:00:00Z',
       },
     ]);
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
     expect(body).toMatchObject({
-      show: { ids: { imdb: 'tt0944947' }, season: { number: 1, episode: { number: 2 } } },
-      progress: 100,
+      shows: [
+        {
+          ids: { imdb: 'tt0944947' },
+          seasons: [
+            {
+              number: 1,
+              episodes: [
+                { number: 2, watched_at: '2019-05-19T20:00:00Z' },
+                { number: 3, watched_at: '2019-05-20T20:00:00Z' },
+              ],
+            },
+          ],
+        },
+      ],
     });
   });
 
-  it('counts a 404 (title unknown to MDBList) as notFound, not failed', async () => {
+  it('counts a 404 (titles unknown to MDBList) as notFound, not failed', async () => {
     routeFetch(() => ({ status: 404 }));
     const res = await new MdblistClient('k').pushHistory([
       { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null },
@@ -144,14 +160,50 @@ describe('MdblistClient.pushHistory', () => {
     expect(res).toMatchObject({ added: 0, notFound: 1, failed: 0 });
   });
 
+  it('takes the counts from the response rather than from what it sent', async () => {
+    routeFetch(() => ({
+      body: { updated: { movies: 1 }, not_found: { movies: [{ ids: { tmdb: 999 } }] } },
+    }));
+    const res = await new MdblistClient('k').pushHistory([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null },
+      { ref: { kind: 'movie', ids: { tmdb: 999 } }, watchedAt: null },
+    ]);
+    expect(res).toMatchObject({ added: 1, notFound: 1, failed: 0 });
+  });
+
+  // The endpoint answers 200 and drops excess episodes into `errors`, so a
+  // status check alone reports a truncated write as a complete one.
+  it('surfaces errors reported alongside a successful status', async () => {
+    routeFetch(() => ({ body: { updated: { episodes: 1 }, errors: ['expansion cap reached'] } }));
+    const res = await new MdblistClient('k').pushHistory([
+      { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 1 }, watchedAt: null },
+    ]);
+    expect(res.note).toContain('expansion cap reached');
+  });
+
   it('counts a whole-show ref and an id-less ref as notFound without a request', async () => {
-    const calls = routeFetch(() => ({ status: 200 }));
+    const calls = routeFetch(() => ({ body: { updated: {} } }));
     const res = await new MdblistClient('k').pushHistory([
       { ref: { kind: 'show', ids: { tmdb: 1399 } }, watchedAt: null },
       { ref: { kind: 'movie', ids: {} }, watchedAt: null },
     ]);
     expect(res.notFound).toBe(2);
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+  });
+
+  it('splits show entries so no request exceeds the 200 MDBList accepts', async () => {
+    const calls = routeFetch(() => ({ body: { updated: { episodes: 1 } } }));
+    await new MdblistClient('k').pushHistory(
+      Array.from({ length: 250 }, (_, i) => ({
+        ref: { kind: 'episode' as const, ids: { tmdb: 1000 + i }, season: 1, number: 1 },
+        watchedAt: null,
+      })),
+    );
+    const posts = calls.filter((c) => c.method === 'POST');
+    expect(posts).toHaveLength(2);
+    for (const p of posts) {
+      expect((p.body as { shows: unknown[] }).shows.length).toBeLessThanOrEqual(200);
+    }
   });
 });
 

@@ -15,6 +15,38 @@ interface ScrobbleFailure {
 }
 
 const MDBLIST_BASE = 'https://api.mdblist.com';
+/**
+ * Show entries per `/sync/watched` write. Over MDBList's cap of 200 the whole
+ * request is rejected, so this splits rather than risking the batch.
+ */
+const SHOWS_PER_WRITE = 200;
+
+type ScrobbleIds = { imdb?: string; tmdb?: number };
+
+interface WatchedWriteResponse {
+  updated?: { movies?: number; shows?: number; seasons?: number; episodes?: number };
+  not_found?: Record<string, unknown[]>;
+  errors?: unknown[];
+}
+
+/** Split a write so no request carries more show entries than MDBList accepts. */
+/** Identity key for grouping, mirroring the id priority the API matches on. */
+function idKey(ids: ScrobbleIds): string {
+  return ids.imdb ? `imdb:${ids.imdb}` : `tmdb:${ids.tmdb}`;
+}
+
+function* batches(
+  movies: Array<Record<string, unknown>>,
+  shows: Array<Record<string, unknown>>,
+): Generator<{ movies: Array<Record<string, unknown>>; shows: Array<Record<string, unknown>> }> {
+  if (movies.length === 0 && shows.length === 0) return;
+  let first = true;
+  for (let i = 0; i < shows.length; i += SHOWS_PER_WRITE) {
+    yield { movies: first ? movies : [], shows: shows.slice(i, i + SHOWS_PER_WRITE) };
+    first = false;
+  }
+  if (first) yield { movies, shows: [] };
+}
 /** MDBList caps `/sync/watched` at 1000 rows per page. */
 const PAGE_LIMIT = 1000;
 /** Bound on history pages so a runaway response never loops forever. */
@@ -57,9 +89,14 @@ interface PlaybackRow {
  * `/sync/watched` / `/sync/playback` for pulling history and resume points.
  * The API key authenticates as the `apikey` query parameter.
  *
- * Writes go through scrobble, which timestamps at "now" and can't backdate, so
- * `datedHistory` is false. History convergence is handled by the engine: it
- * diffs against `pullHistory` before writing, so re-runs push nothing new.
+ * History writes go through `POST /sync/watched`, which carries `watched_at`
+ * per item. Scrobble is kept for progress, where "now" is what a resume point
+ * means. History convergence is handled by the engine: it diffs against
+ * `pullHistory` before writing, so re-runs push nothing new.
+ *
+ * That endpoint updates in place and takes whatever date it is sent, without
+ * comparing it to what is stored. Anything writing a date a user may not have
+ * chosen has to decide that before calling this.
  */
 export class MdblistClient {
   readonly id = 'mdblist' as const;
@@ -76,7 +113,7 @@ export class MdblistClient {
   }
 
   capabilities(): ProviderCapabilities {
-    return { history: true, progress: true, ratings: false, watchlist: true, datedHistory: false };
+    return { history: true, progress: true, ratings: false, watchlist: true, datedHistory: true };
   }
 
   /** Validate the API key. Returns true if accepted, false on 401/403. */
@@ -127,16 +164,90 @@ export class MdblistClient {
 
   async pushHistory(events: WatchEvent[]): Promise<PushResult> {
     const result = emptyPushResult();
-    for (const event of events) {
-      const ok = await this.scrobble('stop', event.ref, 100);
-      if (ok === 'ok') result.added++;
-      else if (ok === 'not_found') result.notFound++;
-      else {
-        result.failed++;
-        result.note ??= ok.failed;
+    const movies: Array<Record<string, unknown>> = [];
+    // Show identity -> its seasons -> episode -> watch time.
+    const shows = new Map<
+      string,
+      { ids: ScrobbleIds; seasons: Map<number, Map<number, string | undefined>> }
+    >();
+
+    for (const e of events) {
+      // Same id selection as the scrobble path: /sync/watched matches on either.
+      const ids = this.scrobbleIds(e.ref);
+      if (!ids) {
+        result.notFound++;
+        continue;
+      }
+      const at = e.watchedAt ?? undefined;
+      if (e.ref.kind === 'movie') {
+        movies.push({ ids, watched_at: at });
+      } else if (e.ref.kind === 'show') {
+        // A whole-series marker would mark every aired episode watched. The
+        // scrobble path never did that and the sources that emit these are not
+        // the ones this fixes, so it stays a miss rather than a bulk write.
+        result.notFound++;
+      } else if (e.ref.season !== undefined && e.ref.number !== undefined) {
+        const key = idKey(ids);
+        const show = shows.get(key) ?? { ids, seasons: new Map<number, Map<number, string | undefined>>() };
+        const eps = show.seasons.get(e.ref.season) ?? new Map<number, string | undefined>();
+        const seen = eps.get(e.ref.number);
+        eps.set(e.ref.number, seen && at ? (seen < at ? seen : at) : (seen ?? at));
+        show.seasons.set(e.ref.season, eps);
+        shows.set(key, show);
+      } else {
+        result.notFound++;
       }
     }
+
+    const showEntries = [
+      ...[...shows.values()].map((show) => ({
+        ids: show.ids,
+        seasons: [...show.seasons.entries()].map(([number, eps]) => ({
+          number,
+          episodes: [...eps.entries()].map(([n, at]) => ({ number: n, watched_at: at })),
+        })),
+      })),
+    ];
+
+    for (const batch of batches(movies, showEntries)) {
+      await this.sendWatched(batch, result);
+    }
     return result;
+  }
+
+  /**
+   * One `/sync/watched` write. Counts come from the response rather than from
+   * what was sent: the endpoint reports `not_found` per kind, and drops excess
+   * episodes into `errors` while still answering 200.
+   */
+  private async sendWatched(
+    body: { movies: Array<Record<string, unknown>>; shows: Array<Record<string, unknown>> },
+    result: PushResult,
+  ): Promise<void> {
+    try {
+      const res = await this.http.post<WatchedWriteResponse>('/sync/watched', body);
+      const updated = res?.updated;
+      result.added +=
+        (updated?.movies ?? 0) + (updated?.shows ?? 0) + (updated?.seasons ?? 0) + (updated?.episodes ?? 0);
+      const missing = Object.values(res?.not_found ?? {}).reduce(
+        (n, list) => n + (Array.isArray(list) ? list.length : 0),
+        0,
+      );
+      result.notFound += missing;
+      const errors = res?.errors ?? [];
+      if (errors.length) {
+        result.note ??= `mdblist reported ${errors.length} write error(s): ${String(errors[0]).slice(0, 120)}`;
+      }
+    } catch (err) {
+      // A 404 is MDBList saying it does not know these titles, which is a miss
+      // rather than a fault — the same distinction the scrobble path drew.
+      if (err instanceof HttpError && err.status === 404) {
+        result.notFound += body.movies.length + body.shows.length;
+        return;
+      }
+      result.failed += body.movies.length + body.shows.length;
+      result.note ??= describeProviderError('mdblist', err);
+    }
   }
 
   // ── Progress ─────────────────────────────────────────────────────
@@ -208,8 +319,8 @@ export class MdblistClient {
   }
 
   /** The ids MDBList accepts on a scrobble; null when we have nothing to match on. */
-  private scrobbleIds(ref: MediaRef): { imdb?: string; tmdb?: number } | null {
-    const ids: { imdb?: string; tmdb?: number } = {};
+  private scrobbleIds(ref: MediaRef): ScrobbleIds | null {
+    const ids: ScrobbleIds = {};
     if (ref.ids.imdb) ids.imdb = ref.ids.imdb;
     if (ref.ids.tmdb) ids.tmdb = ref.ids.tmdb;
     return ids.imdb || ids.tmdb ? ids : null;
