@@ -63,6 +63,15 @@ export function repairRoutes(app: FastifyInstance, db: Db, connections: Connecti
  */
 export function explain(plans: RepairPlan[]): string[] {
   const out: string[] = [];
+  // Every branch below is per-plan, so somebody with no syncs would get an
+  // empty list and a page that does not visibly react to being pressed. That is
+  // the state anyone is in before they set anything up.
+  if (plans.length === 0) {
+    return [
+      'Nothing to check. This corrects watch dates on history Watchbridge has sent to Simkl or ' +
+        'MDBList, and there are no syncs set up yet.',
+    ];
+  }
   for (const p of plans) {
     if (p.counts.pendingRestores > 0) {
       const n = p.counts.pendingRestores;

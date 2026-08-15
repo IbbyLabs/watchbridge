@@ -544,3 +544,15 @@ describe('an empty ledger with something still removed', () => {
     expect(await repair.pending('s1', 'simkl')).toEqual([]);
   });
 });
+
+// Someone with no syncs is the state everybody is in before they set one up,
+// and every other branch is per-plan — so an empty list left the page silent.
+describe('a person with nothing set up', () => {
+  it('is told why there is nothing to check', async () => {
+    const { explain } = await import('../routes/repair.js');
+    const lines = explain([]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('Nothing to check');
+    expect(lines[0]).toContain('no syncs set up');
+  });
+});
