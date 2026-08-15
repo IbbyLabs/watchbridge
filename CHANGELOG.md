@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.9.0](https://github.com/IbbyLabs/watchbridge/compare/v0.8.0...v0.9.0) (2026-08-15)
+
+
+### Features
+
+* **sync:** add history removal to the provider port (BUG-251) ([7296e44](https://github.com/IbbyLabs/watchbridge/commit/7296e447fda73365c89931788ad13e0b16f07d04))
+* **sync:** repair history we delivered with the wrong date (BUG-251) ([072d70f](https://github.com/IbbyLabs/watchbridge/commit/072d70fb6c8884c6f5f588d64151d8a7730e4a07))
+* **web:** let a person run the watch-date repair themselves (BUG-251) ([789ac8e](https://github.com/IbbyLabs/watchbridge/commit/789ac8e8c504b986c53ee3aed8a5da15bcb67755))
+
+
+### Bug Fixes
+
+* **mdblist:** keep every id a history row carries (BUG-251) ([3b8951e](https://github.com/IbbyLabs/watchbridge/commit/3b8951eb67ace156377ac11a8cf856e500ac66fe))
+* **mdblist:** keep the watch date each history row carries (BUG-251) ([3282ae1](https://github.com/IbbyLabs/watchbridge/commit/3282ae17d8b3cc2b3bbd40f8fda1f1d79af71cfa))
+* **mdblist:** write history with its dates, not scrobbles (BUG-251) ([ff85d03](https://github.com/IbbyLabs/watchbridge/commit/ff85d030e50db835598a52ace7b8247ef8d2badb))
+* **simkl:** keep each episode's watch date on import (BUG-251) ([698c521](https://github.com/IbbyLabs/watchbridge/commit/698c521027431723d50d0249537633546fbee4af))
+* **sync:** bound a repair chunk by elapsed time as well as count ([c458635](https://github.com/IbbyLabs/watchbridge/commit/c458635e1d2b054f870594518143fb6438117359))
+* **sync:** correct dates in bounded chunks so a large repair can finish ([d832aa4](https://github.com/IbbyLabs/watchbridge/commit/d832aa4322b710badfce94a597027b8c03051ea5))
+* **sync:** restore removed items even when the ledger is gone ([e1318be](https://github.com/IbbyLabs/watchbridge/commit/e1318be9f913bf5a6b04185a61a1a8023d095ad0))
+* **sync:** stop a sync deletion destroying a pending repair intent ([713ded9](https://github.com/IbbyLabs/watchbridge/commit/713ded9940f66726c31da588f32fefbec6e4a1ec))
+* **sync:** tell a person when an earlier attempt left an item removed ([019a901](https://github.com/IbbyLabs/watchbridge/commit/019a901811108140234fbd97af886bc7b10d7ed4))
+
+
+### Performance Improvements
+
+* **sync:** verify repairs in groups instead of re-reading per item ([bad2bb3](https://github.com/IbbyLabs/watchbridge/commit/bad2bb325d92d0389b43263fe756dfb3cc5f4dbe))
+
 ## [0.8.0](https://github.com/IbbyLabs/watchbridge/compare/v0.7.0...v0.8.0) (2026-07-25)
 
 
