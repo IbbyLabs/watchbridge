@@ -75,6 +75,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   accountRoutes(app, db);
   connectionRoutes(app, connectionService, connectionStore, config);
   syncRoutes(app, db, scheduler, config);
+  repairRoutes(app, db, connectionService);
 
   // The scheduler polls the DB on a timer; keep it off in tests.
   if (config.NODE_ENV !== 'test') scheduler.start();

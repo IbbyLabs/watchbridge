@@ -54,8 +54,15 @@ export function RepairWatchDates() {
     setDone(null);
     try {
       setChecked(await api.get<Answer>('/api/repair/watch-dates'));
-    } catch {
-      setError('Could not check your history. Try again in a moment.');
+    } catch (err) {
+      // A missing route is not a blip, and telling somebody to try again sends
+      // them to press it twice for nothing.
+      const status = (err as { status?: number } | null)?.status;
+      setError(
+        status === 404
+          ? 'This is not available on your server yet. It arrives with the next update.'
+          : 'Could not check your history. Try again in a moment.',
+      );
     } finally {
       setBusy(false);
     }
