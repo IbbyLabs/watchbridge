@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.3](https://github.com/IbbyLabs/watchbridge/compare/v0.9.2...v0.9.3) (2026-08-15)
+
+
+### Performance Improvements
+
+* **trakt:** skip the history pull when the cursor has not moved ([0e1aa40](https://github.com/IbbyLabs/watchbridge/commit/0e1aa40f98039bd6725ae3edfb43f055629deb19))
+
 ## [0.9.2](https://github.com/IbbyLabs/watchbridge/compare/v0.9.1...v0.9.2) (2026-08-15)
 
 
