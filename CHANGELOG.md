@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/IbbyLabs/watchbridge/compare/v0.9.1...v0.9.2) (2026-08-15)
+
+
+### Bug Fixes
+
+* **repair:** say why there is nothing to check when no syncs exist ([01a811b](https://github.com/IbbyLabs/watchbridge/commit/01a811b861319d5088850c5a84e657fe05c10795))
+
 ## [0.9.1](https://github.com/IbbyLabs/watchbridge/compare/v0.9.0...v0.9.1) (2026-08-15)
 
 
