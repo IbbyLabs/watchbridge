@@ -4,6 +4,7 @@ import { api, ApiError } from '../lib/api.ts';
 import { useSession } from '../lib/session.tsx';
 import { Button, Card, Field, Input } from '../components/ui.tsx';
 import { IconLogout } from '../components/icons.tsx';
+import { RepairWatchDates } from '../components/RepairWatchDates.tsx';
 
 export function Settings() {
   const { user, setUser } = useSession();
@@ -28,6 +29,8 @@ export function Settings() {
       </Card>
 
       <ChangePassword />
+
+      <RepairWatchDates />
 
       <ExportData />
 

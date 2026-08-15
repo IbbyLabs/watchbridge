@@ -1,0 +1,127 @@
+import { useState } from 'react';
+import { api } from '../lib/api.ts';
+import { Button, Card } from './ui.tsx';
+
+/**
+ * The one-time repair for history we sent with the wrong watch date.
+ *
+ * It removes entries from the person's history before putting them back, so it
+ * shows what it would do before doing anything, and nothing happens until they
+ * press the second button.
+ */
+
+interface Plan {
+  syncId: string;
+  name: string;
+  target: string;
+  unidentifiable: boolean;
+  counts: {
+    delivered: number;
+    examined: number;
+    candidates: number;
+    repaired: number;
+    skipped: number;
+    failed: number;
+    stoppedBecause?: string;
+  };
+}
+
+interface Answer {
+  plans?: Plan[];
+  results?: Plan[];
+  explanation: string[];
+}
+
+export function RepairWatchDates() {
+  const [checked, setChecked] = useState<Answer | null>(null);
+  const [done, setDone] = useState<Answer | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const plans = checked?.plans ?? [];
+  const toFix = plans.reduce((n, p) => n + p.counts.candidates, 0);
+  const anyUnidentifiable = plans.some((p) => p.unidentifiable);
+
+  const check = async () => {
+    setBusy(true);
+    setError(null);
+    setDone(null);
+    try {
+      setChecked(await api.get<Answer>('/api/repair/watch-dates'));
+    } catch {
+      setError('Could not check your history. Try again in a moment.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setDone(await api.post<Answer>('/api/repair/watch-dates'));
+      setChecked(null);
+    } catch {
+      setError('The repair stopped. Nothing else was changed — you can run it again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-8">
+      <h2 className="mb-3 text-sm font-semibold text-ink">Watch dates</h2>
+      <Card className="p-5">
+        <p className="text-sm text-muted">
+          History sent to Simkl and MDBList used to arrive dated the day it was imported rather than
+          the day you watched it. That is fixed for anything sent from now on. This corrects what was
+          already sent, using our record of what we sent you and when — anything dated outside that
+          is left alone, because it is a watch you really had.
+        </p>
+
+        {error && (
+          <p role="alert" className="mt-3 text-sm text-danger">
+            {error}
+          </p>
+        )}
+
+        {checked && (
+          <div className="mt-4 text-sm text-ink">
+            {checked.explanation.map((line) => (
+              <p key={line} className="mt-2 text-muted">
+                {line}
+              </p>
+            ))}
+            {toFix > 0 && (
+              <p className="mt-3">
+                {toFix} {toFix === 1 ? 'date needs' : 'dates need'} correcting. On Simkl this means
+                removing each one and adding it back, because Simkl will not change a date in place.
+              </p>
+            )}
+          </div>
+        )}
+
+        {done && (
+          <div className="mt-4 text-sm">
+            {done.explanation.map((line) => (
+              <p key={line} className="mt-2 text-muted">
+                {line}
+              </p>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 flex gap-3">
+          <Button variant="secondary" loading={busy} onClick={check}>
+            Check my history
+          </Button>
+          {toFix > 0 && !anyUnidentifiable && (
+            <Button loading={busy} onClick={run}>
+              Correct {toFix} {toFix === 1 ? 'date' : 'dates'}
+            </Button>
+          )}
+        </div>
+      </Card>
+    </section>
+  );
+}
