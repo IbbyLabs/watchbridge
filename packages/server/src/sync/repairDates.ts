@@ -69,6 +69,12 @@ export interface RepairCounts {
   failed: number;
   /** Corrections this call did not reach. Zero means the target is finished. */
   remaining: number;
+  /**
+   * Items removed by an earlier run and not yet put back. Reported on the check
+   * so somebody who was interrupted and walked away is told, rather than
+   * leaving a watch missing until they happen to run the repair again.
+   */
+  pendingRestores: number;
   /** Set when the run stopped early; the reason a person should be shown. */
   stoppedBecause?: string;
 }
@@ -81,7 +87,7 @@ export interface RepairPlan {
 }
 
 function emptyCounts(): RepairCounts {
-  return { delivered: 0, examined: 0, candidates: 0, repaired: 0, skipped: 0, failed: 0, remaining: 0 };
+  return { delivered: 0, examined: 0, candidates: 0, repaired: 0, skipped: 0, failed: 0, remaining: 0, pendingRestores: 0 };
 }
 
 /**
@@ -131,10 +137,13 @@ export class DateRepair {
    */
   async plan(userId: string, syncId: string, source: string, target: string): Promise<RepairPlan> {
     const counts = emptyCounts();
+    counts.pendingRestores = (await this.pending(syncId, target)).length;
     const ledger = await this.deliveries.loadDated(syncId, target);
     counts.delivered = ledger.length;
     if (ledger.length === 0) {
-      return { target, counts, unidentifiable: true };
+      // An interrupted run leaves an item removed. That is worth saying even
+      // when the ledger is gone, because running the repair still restores it.
+      return { target, counts, unidentifiable: counts.pendingRestores === 0 };
     }
 
     const current = await this.readCurrent(userId, target);

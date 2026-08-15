@@ -468,3 +468,52 @@ describe('a chunk that runs slowly', () => {
     expect(result.counts.remaining).toBeGreaterThan(0);
   });
 });
+
+// Somebody interrupted and gone leaves an item removed. Nothing tells them
+// unless the check does, and until they are told the watch stays missing.
+describe('an item left removed by an earlier attempt', () => {
+  it('is reported by the check, with a ledger', async () => {
+    await db.orm.insert(repairIntents).values({
+      id: 'p1',
+      userId: 'u1',
+      syncId: 's1',
+      target: 'simkl',
+      itemKey: itemKey(MOVIE)!,
+      ref: JSON.stringify(MOVIE),
+      watchedAt: RIGHT,
+    });
+    const plan = await repairWith(fakeProvider(null), fakeProvider(RIGHT)).plan('u1', 's1', 'trakt', 'simkl');
+    expect(plan.counts.pendingRestores).toBe(1);
+  });
+
+  // The ledger being gone is why we cannot correct dates. It has no bearing on
+  // putting back something we removed, because the intent carries everything.
+  it('is still reported when there is no ledger left', async () => {
+    await db.orm.delete(deliveries);
+    await db.orm.insert(repairIntents).values({
+      id: 'p2',
+      userId: 'u1',
+      syncId: 's1',
+      target: 'simkl',
+      itemKey: itemKey(MOVIE)!,
+      ref: JSON.stringify(MOVIE),
+      watchedAt: RIGHT,
+    });
+    const plan = await repairWith(fakeProvider(null), fakeProvider(RIGHT)).plan('u1', 's1', 'trakt', 'simkl');
+    expect(plan.counts.pendingRestores).toBe(1);
+    expect(plan.unidentifiable).toBe(false);
+  });
+
+  it('is named in what the person is told', async () => {
+    const { explain } = await import('../routes/repair.js');
+    const [line] = explain([
+      {
+        target: 'simkl',
+        unidentifiable: false,
+        counts: { delivered: 0, examined: 0, candidates: 0, repaired: 0, skipped: 0, failed: 0, remaining: 0, pendingRestores: 1 },
+      },
+    ]);
+    expect(line).toContain('removed from simkl by an earlier attempt');
+    expect(line).toContain('Running this restores it first');
+  });
+});

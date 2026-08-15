@@ -23,6 +23,7 @@ interface Plan {
     skipped: number;
     failed: number;
     remaining: number;
+    pendingRestores: number;
     stoppedBecause?: string;
   };
 }
@@ -44,6 +45,7 @@ export function RepairWatchDates() {
 
   const plans = checked?.plans ?? [];
   const toFix = plans.reduce((n, p) => n + p.counts.candidates, 0);
+  const toRestore = plans.reduce((n, p) => n + p.counts.pendingRestores, 0);
   const anyUnidentifiable = plans.some((p) => p.unidentifiable);
 
   const check = async () => {
@@ -154,9 +156,11 @@ export function RepairWatchDates() {
           <Button variant="secondary" loading={busy} onClick={check}>
             Check my history
           </Button>
-          {toFix > 0 && !anyUnidentifiable && (
+          {(toFix > 0 || toRestore > 0) && !anyUnidentifiable && (
             <Button loading={busy} onClick={run}>
-              Correct {toFix} {toFix === 1 ? 'date' : 'dates'}
+              {toRestore > 0 && toFix === 0
+                ? `Restore ${toRestore} ${toRestore === 1 ? 'item' : 'items'}`
+                : `Correct ${toFix} ${toFix === 1 ? 'date' : 'dates'}`}
             </Button>
           )}
         </div>

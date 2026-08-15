@@ -64,6 +64,13 @@ export function repairRoutes(app: FastifyInstance, db: Db, connections: Connecti
 export function explain(plans: RepairPlan[]): string[] {
   const out: string[] = [];
   for (const p of plans) {
+    if (p.counts.pendingRestores > 0) {
+      const n = p.counts.pendingRestores;
+      out.push(
+        `${n} ${n === 1 ? 'item was' : 'items were'} removed from ${p.target} by an earlier attempt and ` +
+          `not put back yet. Running this restores ${n === 1 ? 'it' : 'them'} first.`,
+      );
+    }
     if (p.unidentifiable) {
       out.push(
         `We have no record of what we sent to ${p.target}, so we cannot tell which dates we got wrong ` +
