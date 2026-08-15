@@ -400,7 +400,13 @@ export class SimklClient {
     const result = emptyPushResult();
     const movies: Array<Record<string, unknown>> = [];
     const wholeShows: Array<Record<string, unknown>> = [];
-    const showsByKey = new Map<string, { ids: ExternalIds; seasons: Map<number, Set<number>> }>();
+    // Episode number to its watch time. Simkl defaults a missing watched_at to
+    // the request time, so an import with the dates dropped lands every episode
+    // on today.
+    const showsByKey = new Map<
+      string,
+      { ids: ExternalIds; seasons: Map<number, Map<number, string | undefined>> }
+    >();
 
     for (const e of events) {
       if (e.ref.kind === 'movie') {
@@ -411,7 +417,8 @@ export class SimklClient {
         movies.push({ watched_at: e.watchedAt ?? undefined, ids: e.ref.ids });
       } else if (e.ref.kind === 'show') {
         // Whole series watched — send the show with no seasons so Simkl marks all
-        // aired episodes.
+        // aired episodes. These land at the request time: watched_at is an
+        // episode-level field, and a show entry has nowhere to carry one.
         if (!hasId(e.ref.ids)) {
           result.notFound++;
           continue;
@@ -424,8 +431,12 @@ export class SimklClient {
         }
         const key = idKey(e.ref.ids);
         const show = showsByKey.get(key) ?? { ids: e.ref.ids, seasons: new Map() };
-        const eps = show.seasons.get(e.ref.season) ?? new Set<number>();
-        eps.add(e.ref.number);
+        const eps = show.seasons.get(e.ref.season) ?? new Map<number, string | undefined>();
+        // Two events for one episode: keep the earlier, which is the watch this
+        // history records rather than a re-watch.
+        const seen = eps.get(e.ref.number);
+        const at = e.watchedAt ?? undefined;
+        eps.set(e.ref.number, seen && at ? (seen < at ? seen : at) : (seen ?? at));
         show.seasons.set(e.ref.season, eps);
         showsByKey.set(key, show);
       }
@@ -437,7 +448,7 @@ export class SimklClient {
         ids: s.ids,
         seasons: [...s.seasons.entries()].map(([number, eps]) => ({
           number,
-          episodes: [...eps].map((n) => ({ number: n })),
+          episodes: [...eps.entries()].map(([n, at]) => ({ number: n, watched_at: at })),
         })),
       })),
     ];

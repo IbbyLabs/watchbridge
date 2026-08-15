@@ -153,6 +153,37 @@ describe('SimklClient.pushHistory', () => {
     expect(body.shows[0]!.ids.tmdb).toBe(1396);
     expect(body.shows[0]!.seasons).toBeUndefined();
   });
+
+    // Simkl defaults a missing watched_at to the request time, so an import that
+    // drops the date lands every episode on the day it was imported.
+    it('carries each episode watch time', async () => {
+      const calls = routeFetch(() => ({ body: {} }));
+      await new SimklClient(cfg).pushHistory([
+        { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 1 }, watchedAt: '2024-03-01T20:00:00Z' },
+        { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 2 }, watchedAt: '2024-03-02T20:00:00Z' },
+      ]);
+      const post = calls.find((c) => c.url.includes('/sync/history') && c.method === 'POST');
+      const body = post!.body as {
+        shows: Array<{ seasons: Array<{ episodes: Array<{ number: number; watched_at?: string }> }> }>;
+      };
+      expect(body.shows[0]!.seasons[0]!.episodes).toEqual([
+        { number: 1, watched_at: '2024-03-01T20:00:00Z' },
+        { number: 2, watched_at: '2024-03-02T20:00:00Z' },
+      ]);
+    });
+
+    // An undated event is the one case where today is the right answer.
+    it('leaves an undated episode without a watch time', async () => {
+      const calls = routeFetch(() => ({ body: {} }));
+      await new SimklClient(cfg).pushHistory([
+        { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 1 }, watchedAt: null },
+      ]);
+      const post = calls.find((c) => c.url.includes('/sync/history') && c.method === 'POST');
+      const body = post!.body as {
+        shows: Array<{ seasons: Array<{ episodes: Array<{ number: number; watched_at?: string }> }> }>;
+      };
+      expect(body.shows[0]!.seasons[0]!.episodes[0]!.watched_at).toBeUndefined();
+    });
 });
 
 describe('SimklClient progress', () => {
