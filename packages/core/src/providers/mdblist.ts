@@ -25,9 +25,11 @@ interface WatchedTitle {
 }
 interface WatchedMovie {
   movie: WatchedTitle;
+  last_watched_at?: string | null;
 }
 interface WatchedEpisode {
   episode: { season: number; number: number; show: WatchedTitle };
+  last_watched_at?: string | null;
 }
 interface WatchedResponse {
   movies?: WatchedMovie[];
@@ -99,7 +101,7 @@ export class MdblistClient {
       );
       for (const m of res.movies ?? []) {
         const tmdb = m.movie.ids?.tmdb;
-        if (tmdb) out.push({ ref: { kind: 'movie', ids: { tmdb } }, watchedAt: null });
+        if (tmdb) out.push({ ref: { kind: 'movie', ids: { tmdb } }, watchedAt: m.last_watched_at ?? null });
       }
       for (const e of res.episodes ?? []) {
         const tmdb = e.episode.show.ids?.tmdb;
@@ -111,7 +113,7 @@ export class MdblistClient {
               season: e.episode.season,
               number: e.episode.number,
             },
-            watchedAt: null,
+            watchedAt: e.last_watched_at ?? null,
           });
         }
       }

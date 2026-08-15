@@ -47,6 +47,34 @@ describe('MdblistClient.validate', () => {
 });
 
 describe('MdblistClient.pullHistory', () => {
+  // /sync/watched returns last_watched_at on every row. Dropping it makes every
+  // imported title land on the day of the import.
+  it('keeps the watch date each row carries', async () => {
+    routeFetch(() => ({
+      body: {
+        movies: [{ movie: { ids: { tmdb: 550 } }, last_watched_at: '2026-02-23T04:33:00.000Z' }],
+        episodes: [
+          {
+            episode: { season: 2, number: 5, show: { ids: { tmdb: 1399 } } },
+            last_watched_at: '2026-02-21T04:06:18.000Z',
+          },
+        ],
+        pagination: { has_more: false },
+      },
+    }));
+
+    const events = await new MdblistClient('k').pullHistory();
+
+    expect(events).toContainEqual({
+      ref: { kind: 'movie', ids: { tmdb: 550 } },
+      watchedAt: '2026-02-23T04:33:00.000Z',
+    });
+    expect(events).toContainEqual({
+      ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 2, number: 5 },
+      watchedAt: '2026-02-21T04:06:18.000Z',
+    });
+  });
+
   it('maps movies and episodes to tmdb-keyed refs and pages until has_more is false', async () => {
     const pages: Record<string, unknown> = {
       'offset=0': {
