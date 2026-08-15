@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { MediaRef, WatchEvent } from '@watchbridge/core';
 import { createDb, type Db } from '../db/client.js';
-import { deliveries, syncs, users } from '../db/schema.js';
+import { deliveries, repairIntents, syncs, users } from '../db/schema.js';
 import { DeliveriesStore } from './deliveries.js';
 import { DateRepair, looksDelivered } from './repairDates.js';
 
@@ -80,7 +80,7 @@ beforeEach(async () => {
     userId: 'u1',
     target: 'simkl',
     dataType: 'history',
-    itemKey: 'tmdb:550',
+    itemKey: 'movie:tmdb:550',
     ref: JSON.stringify(MOVIE),
     createdAt: DELIVERED_AT,
   });
@@ -174,7 +174,7 @@ describe('a provider that updates in place', () => {
       userId: 'u1',
       target: 'mdblist',
       dataType: 'history',
-      itemKey: 'tmdb:550',
+      itemKey: 'movie:tmdb:550',
       ref: JSON.stringify(MOVIE),
       createdAt: DELIVERED_AT,
     });
@@ -250,5 +250,96 @@ describe('what a person with no ledger is told', () => {
     ]);
     expect(line).toContain('tmdb:550');
     expect(line).toContain('Run it again');
+  });
+});
+
+// Neither provider offers a per-item history read, so verifying after every
+// item means pulling the whole account each time and the cost grows with the
+// square of how much is wrong.
+describe('how often it re-reads the account', () => {
+  it('verifies a group with one read rather than one read each', async () => {
+    await db.orm.delete(deliveries);
+    const refs = Array.from({ length: 8 }, (_, i) => ({ kind: 'movie' as const, ids: { tmdb: 100 + i } }));
+    for (const [i, ref] of refs.entries()) {
+      await db.orm.insert(deliveries).values({
+        id: `d${i}`,
+        syncId: 's1',
+        userId: 'u1',
+        target: 'simkl',
+        dataType: 'history',
+        itemKey: `movie:tmdb:${100 + i}`,
+        ref: JSON.stringify(ref),
+        createdAt: DELIVERED_AT,
+      });
+    }
+
+    let pulls = 0;
+    const store = new Map(refs.map((r) => [`tmdb:${r.ids.tmdb}`, WRONG]));
+    const target = {
+      async pullHistory(): Promise<WatchEvent[]> {
+        pulls++;
+        return [...store.entries()].map(([k, at]) => ({
+          ref: { kind: 'movie' as const, ids: { tmdb: Number(k.split(':')[1]) } },
+          watchedAt: at,
+        }));
+      },
+      async removeHistory(events: WatchEvent[]) {
+        for (const e of events) store.delete(`tmdb:${e.ref.ids.tmdb}`);
+        return { added: 1, skipped: 0, failed: 0, notFound: 0 };
+      },
+      async pushHistory(events: WatchEvent[]) {
+        for (const e of events) store.set(`tmdb:${e.ref.ids.tmdb}`, e.watchedAt!);
+        return { added: 1, skipped: 0, failed: 0, notFound: 0 };
+      },
+    };
+    const source = {
+      async pullHistory(): Promise<WatchEvent[]> {
+        return refs.map((r) => ({ ref: r, watchedAt: RIGHT }));
+      },
+      async pushHistory() {
+        return { added: 0, skipped: 0, failed: 0, notFound: 0 };
+      },
+    };
+    const connections = {
+      async clientFor(_u: string, provider: string) {
+        return provider === 'simkl' ? target : source;
+      },
+    };
+    const repair = new DateRepair(connections as never, new DeliveriesStore(db), db);
+
+    const result = await repair.run('u1', 's1', 'trakt', 'simkl');
+
+    expect(result.counts.repaired).toBe(8);
+    // Two reads for the initial state, one to verify the group. Eight items
+    // verified one at a time would be eight more.
+    expect(pulls).toBeLessThanOrEqual(3);
+    expect(await repair.pending('s1', 'simkl')).toEqual([]);
+  });
+});
+
+// Only Simkl writes intents today, so a loose delete collides with nothing.
+// The moment a second removing provider exists, restoring an item on one target
+// would clear the other's pending row and leave that item removed.
+describe('two targets with the same item pending', () => {
+  it('restoring one leaves the other pending', async () => {
+    await db.orm.delete(repairIntents);
+    for (const target of ['simkl', 'other']) {
+      await db.orm.insert(repairIntents).values({
+        id: `i-${target}`,
+        userId: 'u1',
+        syncId: 's1',
+        target,
+        itemKey: 'movie:tmdb:550',
+        ref: JSON.stringify(MOVIE),
+        watchedAt: RIGHT,
+      });
+    }
+
+    const target = fakeProvider(null);
+    const repair = repairWith(target, fakeProvider(RIGHT));
+    await repair.run('u1', 's1', 'trakt', 'simkl');
+
+    expect(await repair.pending('s1', 'simkl')).toEqual([]);
+    expect(await repair.pending('s1', 'other')).toHaveLength(1);
   });
 });

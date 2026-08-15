@@ -20,6 +20,18 @@ const log = createLogger('repair-dates');
  * does not run on anyone's behalf.
  */
 
+/**
+ * Items corrected between verifying reads.
+ *
+ * Writes stay one at a time, so a failure still affects a single item. This
+ * only batches the reading: neither provider offers a per-item history read, so
+ * verifying after every item means pulling the whole account every time, which
+ * grows with the square of how much is wrong. An intent stays until its item
+ * has been seen correct, so anything in the last unverified group is named in
+ * the intents and picked up by the next run.
+ */
+const VERIFY_EVERY = 25;
+
 /** How far a stored date may sit from the delivery for us to own it. */
 const WINDOW_MS = 60 * 60 * 1000;
 
@@ -86,6 +98,9 @@ export class DateRepair {
     private readonly deliveries: DeliveriesStore,
     private readonly db: Db,
   ) {}
+
+  /** Intent rows for items written but not yet seen correct, within one run. */
+  private readonly intentIds = new Map<string, string>();
 
   /**
    * What a repair would do, without doing any of it. The same reads the run
@@ -167,6 +182,7 @@ export class DateRepair {
       return { target, counts, unidentifiable: false };
     }
 
+    const written: Array<{ key: string; wanted: string }> = [];
     for (const entry of ledger) {
       const key = itemKey(entry.ref);
       if (!key || !current.has(key)) continue;
@@ -184,13 +200,31 @@ export class DateRepair {
       counts.candidates++;
 
       const outcome = await this.repairOne(userId, syncId, target, client, entry.ref, key, wanted);
-      if (outcome === 'repaired') {
-        counts.repaired++;
-        continue;
+      if (outcome !== 'written') {
+        counts.failed++;
+        counts.stoppedBecause = outcome;
+        break;
       }
-      counts.failed++;
-      counts.stoppedBecause = outcome;
-      break;
+      written.push({ key, wanted });
+      if (written.length >= VERIFY_EVERY) {
+        const problem = await this.verify(syncId, target, client, written);
+        counts.repaired += written.length - (problem ? 1 : 0);
+        written.length = 0;
+        if (problem) {
+          counts.failed++;
+          counts.stoppedBecause = problem;
+          break;
+        }
+      }
+    }
+
+    if (!counts.stoppedBecause && written.length) {
+      const problem = await this.verify(syncId, target, client, written);
+      counts.repaired += written.length - (problem ? 1 : 0);
+      if (problem) {
+        counts.failed++;
+        counts.stoppedBecause = problem;
+      }
     }
     return { target, counts, unidentifiable: false };
   }
@@ -210,7 +244,7 @@ export class DateRepair {
     ref: MediaRef,
     key: string,
     wanted: string,
-  ): Promise<'repaired' | string> {
+  ): Promise<'written' | string> {
     const intentId = randomUUID();
     const mustRemove = target !== 'mdblist';
 
@@ -230,18 +264,43 @@ export class DateRepair {
       }
 
       await client.pushHistory([{ ref, watchedAt: wanted }]);
-
-      const after = byKey(await client.pullHistory()).get(key) ?? null;
-      if (!after || Math.abs(Date.parse(after) - Date.parse(wanted)) > 1000) {
-        return `an item did not read back with its corrected date (${key})`;
+      if (!mustRemove) {
+        // Nothing was removed, so there is no intent to clear.
+        return 'written';
       }
-
-      await this.db.orm.delete(repairIntents).where(eq(repairIntents.id, intentId));
-      return 'repaired';
+      this.intentIds.set(`${target}:${key}`, intentId);
+      return 'written';
     } catch (err) {
       log.warn({ userId, target, key, err }, 'Could not correct a watch date');
       return `a write failed part-way (${key})`;
     }
+  }
+
+  /**
+   * Confirm a group of corrections landed, in one read rather than one each.
+   * Returns the reason to stop, or undefined when every item is correct.
+   */
+  private async verify(
+    syncId: string,
+    target: string,
+    client: RepairClient,
+    written: Array<{ key: string; wanted: string }>,
+  ): Promise<string | undefined> {
+    const now = byKey(await client.pullHistory());
+    for (const item of written) {
+      const after = now.get(item.key) ?? null;
+      if (!after || Math.abs(Date.parse(after) - Date.parse(item.wanted)) > 1000) {
+        return `an item did not read back with its corrected date (${item.key})`;
+      }
+    }
+    for (const item of written) {
+      const id = this.intentIds.get(`${target}:${item.key}`);
+      if (!id) continue;
+      await this.db.orm.delete(repairIntents).where(eq(repairIntents.id, id));
+      this.intentIds.delete(`${target}:${item.key}`);
+    }
+    void syncId;
+    return undefined;
   }
 
   /**
@@ -268,7 +327,16 @@ export class DateRepair {
         }
         await this.db.orm
           .delete(repairIntents)
-          .where(and(eq(repairIntents.syncId, syncId), eq(repairIntents.itemKey, key)));
+          .where(
+            and(
+              eq(repairIntents.syncId, syncId),
+              // The unique index is on all three. Without the target, restoring
+              // an item for one provider clears another provider's pending row
+              // and leaves that item removed with nothing knowing.
+              eq(repairIntents.target, target),
+              eq(repairIntents.itemKey, key),
+            ),
+          );
         repaired++;
       } catch (err) {
         log.warn({ userId, target, key, err }, 'Could not restore an item removed by an earlier run');
