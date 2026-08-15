@@ -1,5 +1,9 @@
 import { itemKey, createLogger, type MediaRef, type WatchEvent } from '@watchbridge/core';
 import type { ConnectionService } from '../connections/service.js';
+import { randomUUID } from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
+import type { Db } from '../db/client.js';
+import { repairIntents } from '../db/schema.js';
 import type { DeliveriesStore } from './deliveries.js';
 
 const log = createLogger('repair-dates');
@@ -69,10 +73,18 @@ function byKey(events: WatchEvent[]): Map<string, string | null> {
   return out;
 }
 
+/** The provider surface the repair uses, so a fake needs nothing more. */
+interface RepairClient {
+  pullHistory(): Promise<WatchEvent[]>;
+  pushHistory(events: WatchEvent[]): Promise<unknown>;
+  removeHistory?(events: WatchEvent[]): Promise<unknown>;
+}
+
 export class DateRepair {
   constructor(
     private readonly connections: ConnectionService,
     private readonly deliveries: DeliveriesStore,
+    private readonly db: Db,
   ) {}
 
   /**
@@ -111,6 +123,168 @@ export class DateRepair {
       counts.candidates++;
     }
     return { target, counts, unidentifiable: false };
+  }
+
+  /**
+   * Correct the dates this repair owns, one item at a time.
+   *
+   * One item per step rather than a batch: this is started by a person and left
+   * to run, so an hour costs nothing, and a failure between the removal and the
+   * add then affects a single item instead of a batch of them. The intent row is
+   * written before the removal so an interruption leaves a record of what is
+   * missing rather than a gap nothing knows about.
+   *
+   * It stops on the first item that does not read back correctly. Twenty items
+   * corrected and then a halt is recoverable; two thousand streamed through with
+   * a silent failure at item forty is not.
+   */
+  async run(userId: string, syncId: string, source: string, target: string): Promise<RepairPlan> {
+    const counts = emptyCounts();
+    const ledger = await this.deliveries.loadDated(syncId, target);
+    counts.delivered = ledger.length;
+    if (ledger.length === 0) return { target, counts, unidentifiable: true };
+
+    const client = await this.connections.clientFor(userId, target as never);
+    if (!client) {
+      counts.stoppedBecause = `${target} is not connected`;
+      return { target, counts, unidentifiable: false };
+    }
+    const current = await this.readCurrent(userId, target);
+    const sourceDates = await this.readCurrent(userId, source);
+    if (!current || !sourceDates) {
+      counts.stoppedBecause = 'could not read both sides, so nothing was changed';
+      return { target, counts, unidentifiable: false };
+    }
+
+    // Anything removed by an earlier run and not put back comes first: it is
+    // the only state where a person is missing a watch rather than holding a
+    // wrong date, so it is worse than everything below it.
+    const resumed = await this.finishPending(userId, syncId, target, client);
+    counts.repaired += resumed.repaired;
+    counts.failed += resumed.failed;
+    if (resumed.stoppedBecause) {
+      counts.stoppedBecause = resumed.stoppedBecause;
+      return { target, counts, unidentifiable: false };
+    }
+
+    for (const entry of ledger) {
+      const key = itemKey(entry.ref);
+      if (!key || !current.has(key)) continue;
+      counts.examined++;
+
+      if (!looksDelivered(current.get(key) ?? null, entry.deliveredAt)) {
+        counts.skipped++;
+        continue;
+      }
+      const wanted = sourceDates.get(key);
+      if (!wanted) {
+        counts.skipped++;
+        continue;
+      }
+      counts.candidates++;
+
+      const outcome = await this.repairOne(userId, syncId, target, client, entry.ref, key, wanted);
+      if (outcome === 'repaired') {
+        counts.repaired++;
+        continue;
+      }
+      counts.failed++;
+      counts.stoppedBecause = outcome;
+      break;
+    }
+    return { target, counts, unidentifiable: false };
+  }
+
+  /**
+   * One item. Returns 'repaired' or the reason a person should be shown.
+   *
+   * Simkl will not change a date in place, so the removal is unavoidable there.
+   * MDBList overwrites whatever is stored, so it needs no removal — and must not
+   * be given one, since a removal it cannot undo is pure risk.
+   */
+  private async repairOne(
+    userId: string,
+    syncId: string,
+    target: string,
+    client: RepairClient,
+    ref: MediaRef,
+    key: string,
+    wanted: string,
+  ): Promise<'repaired' | string> {
+    const intentId = randomUUID();
+    const mustRemove = target !== 'mdblist';
+
+    try {
+      if (mustRemove) {
+        if (!client.removeHistory) return `${target} cannot remove history, so the date cannot be corrected`;
+        await this.db.orm.insert(repairIntents).values({
+          id: intentId,
+          userId,
+          syncId,
+          target,
+          itemKey: key,
+          ref: JSON.stringify(ref),
+          watchedAt: wanted,
+        });
+        await client.removeHistory([{ ref, watchedAt: null }]);
+      }
+
+      await client.pushHistory([{ ref, watchedAt: wanted }]);
+
+      const after = byKey(await client.pullHistory()).get(key) ?? null;
+      if (!after || Math.abs(Date.parse(after) - Date.parse(wanted)) > 1000) {
+        return `an item did not read back with its corrected date (${key})`;
+      }
+
+      await this.db.orm.delete(repairIntents).where(eq(repairIntents.id, intentId));
+      return 'repaired';
+    } catch (err) {
+      log.warn({ userId, target, key, err }, 'Could not correct a watch date');
+      return `a write failed part-way (${key})`;
+    }
+  }
+
+  /**
+   * Put back anything an earlier run removed and did not restore. Each intent
+   * carries the ref and the date, so this needs neither the source nor the
+   * ledger — which is what makes it survive the sync being deleted.
+   */
+  private async finishPending(
+    userId: string,
+    syncId: string,
+    target: string,
+    client: RepairClient,
+  ): Promise<{ repaired: number; failed: number; stoppedBecause?: string }> {
+    const pending = await this.pending(syncId, target);
+    let repaired = 0;
+    for (const item of pending) {
+      const key = itemKey(item.ref);
+      if (!key) continue;
+      try {
+        await client.pushHistory([{ ref: item.ref, watchedAt: item.watchedAt }]);
+        const after = byKey(await client.pullHistory()).get(key) ?? null;
+        if (!after || Math.abs(Date.parse(after) - Date.parse(item.watchedAt)) > 1000) {
+          return { repaired, failed: 1, stoppedBecause: `an item removed earlier did not come back (${key})` };
+        }
+        await this.db.orm
+          .delete(repairIntents)
+          .where(and(eq(repairIntents.syncId, syncId), eq(repairIntents.itemKey, key)));
+        repaired++;
+      } catch (err) {
+        log.warn({ userId, target, key, err }, 'Could not restore an item removed by an earlier run');
+        return { repaired, failed: 1, stoppedBecause: `an item removed earlier could not be restored (${key})` };
+      }
+    }
+    return { repaired, failed: 0 };
+  }
+
+  /** Items removed and not yet put back, for this sync and target. */
+  async pending(syncId: string, target: string): Promise<Array<{ ref: MediaRef; watchedAt: string }>> {
+    const rows = await this.db.orm
+      .select()
+      .from(repairIntents)
+      .where(and(eq(repairIntents.syncId, syncId), eq(repairIntents.target, target)));
+    return rows.map((r) => ({ ref: JSON.parse(r.ref) as MediaRef, watchedAt: r.watchedAt }));
   }
 
   private async readCurrent(userId: string, provider: string): Promise<Map<string, string | null> | null> {

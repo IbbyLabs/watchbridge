@@ -12,6 +12,7 @@ import { AuthService } from './auth/service.js';
 import { ConnectionStore } from './connections/store.js';
 import { ConnectionService } from './connections/service.js';
 import { connectionRoutes } from './routes/connections.js';
+import { repairRoutes } from './routes/repair.js';
 import { SyncRunner } from './sync/runner.js';
 import { SyncScheduler } from './sync/scheduler.js';
 import { syncRoutes } from './routes/syncs.js';
