@@ -49,6 +49,39 @@ describe('MdblistClient.validate', () => {
 describe('MdblistClient.pullHistory', () => {
   // /sync/watched returns last_watched_at on every row. Dropping it makes every
   // imported title land on the day of the import.
+  // MDBList knows some titles only by imdb. Keying the read on tmdb alone makes
+  // those invisible to anything reading history back, including a repair.
+  it('keeps every id the row carries, not only tmdb', async () => {
+    routeFetch(() => ({
+      body: {
+        movies: [
+          {
+            movie: { ids: { imdb: 'tt0110413', trakt: 70, tvdb: 234 } },
+            last_watched_at: '2019-05-19T20:00:00.000Z',
+          },
+        ],
+        episodes: [
+          {
+            episode: { season: 1, number: 1, show: { ids: { tmdb: 1399, imdb: 'tt0944947' } } },
+            last_watched_at: '2018-03-04T20:00:00.000Z',
+          },
+        ],
+        pagination: { has_more: false },
+      },
+    }));
+
+    const events = await new MdblistClient('k').pullHistory();
+
+    expect(events).toContainEqual({
+      ref: { kind: 'movie', ids: { imdb: 'tt0110413', trakt: 70, tvdb: 234 } },
+      watchedAt: '2019-05-19T20:00:00.000Z',
+    });
+    expect(events).toContainEqual({
+      ref: { kind: 'episode', ids: { tmdb: 1399, imdb: 'tt0944947' }, season: 1, number: 1 },
+      watchedAt: '2018-03-04T20:00:00.000Z',
+    });
+  });
+
   it('keeps the watch date each row carries', async () => {
     routeFetch(() => ({
       body: {

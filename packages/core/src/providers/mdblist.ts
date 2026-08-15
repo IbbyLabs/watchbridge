@@ -6,6 +6,7 @@ import {
   type ProgressEvent,
   type ProviderCapabilities,
   type PushResult,
+  type ExternalIds,
   type WatchEvent,
 } from './types.js';
 
@@ -29,7 +30,10 @@ interface WatchedWriteResponse {
   errors?: unknown[];
 }
 
-/** Split a write so no request carries more show entries than MDBList accepts. */
+/**
+ * Split a write so no request carries more show entries than MDBList accepts.
+ * Movies ride with the first batch; they have no cap of their own.
+ */
 /** Identity key for grouping, mirroring the id priority the API matches on. */
 function idKey(ids: ScrobbleIds): string {
   return ids.imdb ? `imdb:${ids.imdb}` : `tmdb:${ids.tmdb}`;
@@ -53,7 +57,25 @@ const PAGE_LIMIT = 1000;
 const MAX_PAGES = 50;
 
 interface WatchedTitle {
-  ids?: { tmdb?: number | null };
+  ids?: { tmdb?: number | null; imdb?: string | null; tvdb?: number | null; trakt?: number | null };
+}
+
+/**
+ * Every id MDBList returned. Dropping the ones we do not key on makes a title
+ * it knows only by imdb invisible to anything reading history back.
+ */
+function idsFrom(t: WatchedTitle | undefined): ExternalIds {
+  const ids: ExternalIds = {};
+  if (t?.ids?.tmdb) ids.tmdb = t.ids.tmdb;
+  if (t?.ids?.imdb) ids.imdb = t.ids.imdb;
+  if (t?.ids?.tvdb) ids.tvdb = t.ids.tvdb;
+  if (t?.ids?.trakt) ids.trakt = t.ids.trakt;
+  return ids;
+}
+
+/** Whether a ref carries anything MDBList can be asked about. */
+function hasId(ids: ExternalIds): boolean {
+  return Boolean(ids.tmdb || ids.imdb);
 }
 interface WatchedMovie {
   movie: WatchedTitle;
@@ -139,16 +161,16 @@ export class MdblistClient {
       // last_watched_at is the most recent play, not the first. It becomes the
       // one date the target gets.
       for (const m of res.movies ?? []) {
-        const tmdb = m.movie.ids?.tmdb;
-        if (tmdb) out.push({ ref: { kind: 'movie', ids: { tmdb } }, watchedAt: m.last_watched_at ?? null });
+        const ids = idsFrom(m.movie);
+        if (hasId(ids)) out.push({ ref: { kind: 'movie', ids }, watchedAt: m.last_watched_at ?? null });
       }
       for (const e of res.episodes ?? []) {
-        const tmdb = e.episode.show.ids?.tmdb;
-        if (tmdb) {
+        const ids = idsFrom(e.episode.show);
+        if (hasId(ids)) {
           out.push({
             ref: {
               kind: 'episode',
-              ids: { tmdb },
+              ids,
               season: e.episode.season,
               number: e.episode.number,
             },
