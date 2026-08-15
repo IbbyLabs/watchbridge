@@ -510,3 +510,21 @@ describe('a failed read is not an empty library', () => {
     expect(res.note).toMatch(/locked/i);
   });
 });
+
+describe('SimklClient.removeHistory', () => {
+  // The repair removes before re-adding, so this call decides whether a watch
+  // comes back at all. It has to name the exact episode, not the show.
+  it('removes the named episodes and nothing wider', async () => {
+    const calls = routeFetch(() => ({ body: {} }));
+    await new SimklClient(cfg).removeHistory([
+      { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 1 }, watchedAt: null },
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null },
+    ]);
+    const post = calls.find((c) => c.url.includes('/sync/history/remove') && c.method === 'POST');
+    expect(post).toBeTruthy();
+    expect(post!.body).toMatchObject({
+      movies: [{ ids: { tmdb: 550 } }],
+      shows: [{ ids: { tmdb: 1399 }, seasons: [{ number: 1, episodes: [{ number: 1 }] }] }],
+    });
+  });
+})

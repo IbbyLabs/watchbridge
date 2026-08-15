@@ -477,6 +477,56 @@ export class SimklClient {
     return result;
   }
 
+  /**
+   * Remove items from history. Simkl has no way to change a watch date, so a
+   * correction is a removal followed by an add.
+   */
+  async removeHistory(events: WatchEvent[]): Promise<PushResult> {
+    const result = emptyPushResult();
+    const movies: Array<Record<string, unknown>> = [];
+    const showsByKey = new Map<string, { ids: ExternalIds; seasons: Map<number, Set<number>> }>();
+
+    for (const e of events) {
+      if (!hasId(e.ref.ids)) {
+        result.notFound++;
+        continue;
+      }
+      if (e.ref.kind === 'movie') {
+        movies.push({ ids: e.ref.ids });
+      } else if (e.ref.kind === 'episode' && e.ref.season !== undefined && e.ref.number !== undefined) {
+        const key = idKey(e.ref.ids);
+        const show = showsByKey.get(key) ?? { ids: e.ref.ids, seasons: new Map() };
+        const eps = show.seasons.get(e.ref.season) ?? new Set<number>();
+        eps.add(e.ref.number);
+        show.seasons.set(e.ref.season, eps);
+        showsByKey.set(key, show);
+      } else {
+        result.notFound++;
+      }
+    }
+
+    const shows = [...showsByKey.values()].map((s) => ({
+      ids: s.ids,
+      seasons: [...s.seasons.entries()].map(([number, eps]) => ({
+        number,
+        episodes: [...eps].map((n) => ({ number: n })),
+      })),
+    }));
+    if (movies.length === 0 && shows.length === 0) return result;
+
+    try {
+      await this.http.post('/sync/history/remove', { movies, shows });
+      result.added = movies.length + [...showsByKey.values()].reduce(
+        (a, s) => a + [...s.seasons.values()].reduce((b, eps) => b + eps.size, 0),
+        0,
+      );
+    } catch (err) {
+      result.failed = events.length;
+      result.note = describeProviderError('simkl', err);
+    }
+    return result;
+  }
+
   async pullRatings(): Promise<RatingEvent[]> {
     // Movies and shows/anime only; Simkl does not rate episodes or seasons.
     const res = await this.http.post<SimklRatingsResponse>('/sync/ratings', {});

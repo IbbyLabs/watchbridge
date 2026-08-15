@@ -318,3 +318,19 @@ describe('a failed scrobble explains itself', () => {
     expect(res.note).not.toContain('super-secret-key');
   });
 });
+
+describe('MdblistClient.removeHistory', () => {
+  it('removes the named episodes and nothing wider', async () => {
+    const calls = routeFetch(() => ({ body: {} }));
+    await new MdblistClient('k').removeHistory([
+      { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 1 }, watchedAt: null },
+      { ref: { kind: 'movie', ids: { imdb: 'tt0110413' } }, watchedAt: null },
+    ]);
+    const post = calls.find((c) => c.url.includes('/sync/watched/remove') && c.method === 'POST');
+    expect(post).toBeTruthy();
+    expect(post!.body).toMatchObject({
+      movies: [{ ids: { imdb: 'tt0110413' } }],
+      shows: [{ ids: { tmdb: 1399 }, seasons: [{ number: 1, episodes: [{ number: 1 }] }] }],
+    });
+  });
+})

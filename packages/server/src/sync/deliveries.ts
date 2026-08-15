@@ -33,6 +33,35 @@ export class DeliveriesStore {
     return out;
   }
 
+  /**
+   * Delivered refs with when they were delivered, for a (sync, target).
+   *
+   * The repair needs the timestamp: a title whose stored date sits in the window
+   * when we delivered it is one we dated wrong, and one dated outside it is a
+   * watch the person actually had.
+   */
+  async loadDated(
+    syncId: string,
+    target: string,
+    dataType: DataType = 'history',
+  ): Promise<Array<{ ref: MediaRef; deliveredAt: Date }>> {
+    const rows = await this.db.orm
+      .select({ ref: deliveries.ref, createdAt: deliveries.createdAt })
+      .from(deliveries)
+      .where(
+        and(eq(deliveries.syncId, syncId), eq(deliveries.target, target), eq(deliveries.dataType, dataType)),
+      );
+    const out: Array<{ ref: MediaRef; deliveredAt: Date }> = [];
+    for (const r of rows) {
+      try {
+        out.push({ ref: JSON.parse(r.ref) as MediaRef, deliveredAt: r.createdAt });
+      } catch {
+        // Skip a corrupt row rather than fail the whole repair.
+      }
+    }
+    return out;
+  }
+
   /** Record newly-delivered refs. Idempotent — re-recording the same item is a no-op. */
   async record(
     syncId: string,

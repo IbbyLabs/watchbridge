@@ -43,6 +43,12 @@ export interface SyncTarget extends SyncSource {
   /** Present only on providers that accept watchlist writes (Trakt, Simkl). */
   pushWatchlist?(events: WatchlistEvent[]): Promise<PushResult>;
   removeWatchlist?(events: WatchlistEvent[]): Promise<PushResult>;
+  /**
+   * Take items out of watched history. Present only where the provider offers
+   * it, and used by the date repair rather than by a sync: Simkl will not change
+   * a watch date in place, so correcting one means removing and re-adding.
+   */
+  removeHistory?(events: WatchEvent[]): Promise<PushResult>;
 }
 
 /** Enough of an item to recognise it in a run report, without the whole ref. */

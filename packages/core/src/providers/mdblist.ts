@@ -279,6 +279,61 @@ export class MdblistClient {
     }
   }
 
+  /**
+   * Take items out of watched history. Clears `last_watched_at` while leaving
+   * ratings and other state alone.
+   */
+  async removeHistory(events: WatchEvent[]): Promise<PushResult> {
+    const result = emptyPushResult();
+    const movies: Array<Record<string, unknown>> = [];
+    const shows = new Map<string, { ids: ScrobbleIds; seasons: Map<number, Set<number>> }>();
+
+    for (const e of events) {
+      const ids = this.scrobbleIds(e.ref);
+      if (!ids) {
+        result.notFound++;
+        continue;
+      }
+      if (e.ref.kind === 'movie') {
+        movies.push({ ids });
+      } else if (e.ref.kind === 'episode' && e.ref.season !== undefined && e.ref.number !== undefined) {
+        const key = idKey(ids);
+        const show = shows.get(key) ?? { ids, seasons: new Map<number, Set<number>>() };
+        const eps = show.seasons.get(e.ref.season) ?? new Set<number>();
+        eps.add(e.ref.number);
+        show.seasons.set(e.ref.season, eps);
+        shows.set(key, show);
+      } else {
+        result.notFound++;
+      }
+    }
+
+    const showEntries = [...shows.values()].map((show) => ({
+      ids: show.ids,
+      seasons: [...show.seasons.entries()].map(([number, eps]) => ({
+        number,
+        episodes: [...eps].map((n) => ({ number: n })),
+      })),
+    }));
+    if (movies.length === 0 && showEntries.length === 0) return result;
+
+    try {
+      await this.http.post('/sync/watched/remove', { movies, shows: showEntries });
+      result.added = movies.length + [...shows.values()].reduce(
+        (a, s) => a + [...s.seasons.values()].reduce((b, eps) => b + eps.size, 0),
+        0,
+      );
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) {
+        result.notFound += movies.length + showEntries.length;
+        return result;
+      }
+      result.failed = events.length;
+      result.note = describeProviderError('mdblist', err);
+    }
+    return result;
+  }
+
   // ── Progress ─────────────────────────────────────────────────────
 
   async pullProgress(): Promise<ProgressEvent[]> {

@@ -209,3 +209,34 @@ export type Connection = typeof connections.$inferSelect;
 export type Sync = typeof syncs.$inferSelect;
 export type SyncRun = typeof syncRuns.$inferSelect;
 export type Delivery = typeof deliveries.$inferSelect;
+
+/**
+ * Write-ahead for the date repair.
+ *
+ * Simkl will not update a watch date in place, so correcting one means removing
+ * the entry and adding it back. A row here is written before the removal and
+ * cleared after the add, so a crash in between leaves a record saying which
+ * item is mid-flight instead of an episode that is simply gone.
+ */
+export const repairIntents = pgTable(
+  'repair_intents',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    syncId: text('sync_id')
+      .notNull()
+      .references(() => syncs.id, { onDelete: 'cascade' }),
+    target: text('target').notNull(),
+    itemKey: text('item_key').notNull(),
+    /** JSON MediaRef, so the item can be restored without re-reading the source. */
+    ref: text('ref').notNull(),
+    /** The date the entry should end up with. */
+    watchedAt: text('watched_at').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('repair_intents_scope_uniq').on(t.syncId, t.target, t.itemKey)],
+);
+
+export type RepairIntent = typeof repairIntents.$inferSelect;
