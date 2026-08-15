@@ -14,11 +14,6 @@ DO $$ BEGIN
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
---> statement-breakpoint
-DO $$ BEGIN
- ALTER TABLE "repair_intents" ADD CONSTRAINT "repair_intents_sync_id_syncs_id_fk" FOREIGN KEY ("sync_id") REFERENCES "syncs"("id") ON DELETE cascade ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
+
 --> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "repair_intents_scope_uniq" ON "repair_intents" ("sync_id","target","item_key");

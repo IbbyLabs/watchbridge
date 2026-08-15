@@ -225,9 +225,13 @@ export const repairIntents = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    syncId: text('sync_id')
-      .notNull()
-      .references(() => syncs.id, { onDelete: 'cascade' }),
+    /**
+     * Deliberately not a foreign key. A pending intent is the only record that
+     * an item was removed and not yet restored, and it carries everything needed
+     * to restore it. Cascading from syncs would let deleting a sync destroy that
+     * record, which is the state the row exists to prevent.
+     */
+    syncId: text('sync_id').notNull(),
     target: text('target').notNull(),
     itemKey: text('item_key').notNull(),
     /** JSON MediaRef, so the item can be restored without re-reading the source. */
