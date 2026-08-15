@@ -92,6 +92,10 @@ export function itemKey(ref: MediaRef): string | null {
  * as individual episodes reconcile as already-present instead of re-adding.
  */
 export class MatchIndex {
+  /** Private so `MatchIndex.from` is the only way in: a constructor taking refs
+   * and ignoring them looks identical to one that works. */
+  private constructor() {}
+
   private readonly ids = new Set<string>();
   /** Show keys for series marked fully watched (from `show` refs). */
   private readonly completedShows = new Set<string>();

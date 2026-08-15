@@ -30,7 +30,14 @@ interface WatchedWriteResponse {
   errors?: unknown[];
 }
 
-/** Identity key for grouping, mirroring the id priority the API matches on. */
+/**
+ * Identity key for grouping episodes into one show entry.
+ *
+ * imdb leads here where sync/identity.ts leads with tmdb. The difference is
+ * deliberate: this groups a payload MDBList resolves, that one keys stored
+ * delivery records. Harmonising them changes grouping on one side or every
+ * stored key on the other.
+ */
 function idKey(ids: ScrobbleIds): string {
   return ids.imdb ? `imdb:${ids.imdb}` : `tmdb:${ids.tmdb}`;
 }
