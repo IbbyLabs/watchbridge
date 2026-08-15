@@ -99,6 +99,8 @@ export class MdblistClient {
       const res = await this.http.get<WatchedResponse>(
         `/sync/watched?limit=${PAGE_LIMIT}&offset=${offset}`,
       );
+      // last_watched_at is the most recent play, not the first. It becomes the
+      // one date the target gets.
       for (const m of res.movies ?? []) {
         const tmdb = m.movie.ids?.tmdb;
         if (tmdb) out.push({ ref: { kind: 'movie', ids: { tmdb } }, watchedAt: m.last_watched_at ?? null });
