@@ -205,6 +205,53 @@ export async function runSync(
   };
 }
 
+/**
+ * Records the shape of the watch dates being delivered, never the dates.
+ *
+ * A delivery keeps no copy of what it wrote, so a wrong-date bug is
+ * unverifiable afterwards. One distinct date means everything landed on the
+ * same day, which is the failure; a real history spans years. Values are left
+ * out deliberately — this is somebody's viewing history.
+ */
+export interface WatchedAtShape {
+  items: number;
+  distinctDates: number;
+  earliest?: string;
+  latest?: string;
+}
+
+/**
+ * Describes the watch dates in a delivery without carrying any of them.
+ *
+ * One distinct date means everything landed on the same day, which is the
+ * wrong-date failure; a real history spans years. Returns undefined when
+ * nothing carries a date, so an empty result is never read as "all today".
+ */
+export function watchedAtShape(events: WatchEvent[]): WatchedAtShape | undefined {
+  const dates = events
+    .map((e) => e.watchedAt)
+    .filter((d): d is string => typeof d === 'string' && d.length > 0);
+  if (dates.length === 0) return undefined;
+  const sorted = [...new Set(dates)].sort();
+  return {
+    items: events.length,
+    distinctDates: sorted.length,
+    earliest: sorted[0]?.slice(0, 10),
+    latest: sorted.at(-1)?.slice(0, 10),
+  };
+}
+
+/**
+ * Records the shape of what is being delivered. A delivery keeps no copy of the
+ * values it wrote, so a wrong-date bug is otherwise unverifiable afterwards.
+ * The values are left out deliberately — this is somebody's viewing history.
+ */
+function logWatchedAtShape(sourceId: string, targetId: string, events: WatchEvent[]): void {
+  const shape = watchedAtShape(events);
+  if (!shape) return;
+  log.info({ source: sourceId, target: targetId, ...shape }, 'Delivering history; watch dates span');
+}
+
 async function runHistory(
   source: SyncSource,
   target: SyncTarget,
@@ -235,6 +282,7 @@ async function runHistory(
   report.note ??= shapeWarning(source.id, 'history', src.length, plan.unmatched.length);
   let deliveredNow: MediaRef[] = [];
   if (!preview && plan.toAdd.length > 0) {
+    logWatchedAtShape(source.id, target.id, plan.toAdd);
     const res = await target.pushHistory(plan.toAdd);
     applyPush(report, res);
     // A push that didn't throw reached the target. Remember these so the next
