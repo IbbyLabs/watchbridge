@@ -1,9 +1,8 @@
 /**
- * `/scrobble/pause` is absent from Trakt's published API. If it is withdrawn,
- * resume positions stop being written and nothing else changes — no user-facing
- * error, no missing feature, just a thing that quietly stops keeping up. The
- * only signal available is the status code, so it has to be distinguishable
- * from an ordinary write failure.
+ * If `/scrobble/pause` stops being served, resume positions stop being written
+ * and nothing else changes — no user-facing error, no missing feature, just a
+ * thing that quietly stops keeping up. The only signal available is the status
+ * code, so it has to be distinguishable from an ordinary write failure.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -38,7 +37,7 @@ afterEach(() => {
   warn.mockClear();
 });
 
-describe('the undocumented resume-position endpoint', () => {
+describe('the resume-position endpoint going away', () => {
   it('warns when Trakt answers 404', async () => {
     routeFetch(404);
     const res = await client().pushProgress([event]);
@@ -65,5 +64,21 @@ describe('the undocumented resume-position endpoint', () => {
     const res = await client().pushProgress([event]);
     expect(res.added).toBe(1);
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('a failed resume-position write', () => {
+  it('keeps a reason, as every other provider does', async () => {
+    routeFetch(422);
+    const res = await client().pushProgress([event]);
+    expect(res.failed).toBe(1);
+    expect(res.note).toBeTruthy();
+    expect(res.note).toMatch(/trakt/i);
+  });
+
+  it('keeps no reason when nothing failed', async () => {
+    routeFetch(200);
+    const res = await client().pushProgress([event]);
+    expect(res.note).toBeUndefined();
   });
 });

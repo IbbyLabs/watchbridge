@@ -1,5 +1,6 @@
 import { HttpClient, HttpError } from './http.js';
 import { createLogger } from '../logger.js';
+import { describeProviderError } from './errors.js';
 import { sharedRateGate, type RateGate } from './rateGate.js';
 import {
   emptyPushResult,
@@ -462,15 +463,17 @@ export class TraktClient {
         // 409 = a scrobble for this item is already in progress; treat as applied.
         if (err instanceof HttpError && err.status === 409) result.added++;
         else {
-          // /scrobble/pause is absent from Trakt's published API. A 404 or 405
-          // is what its withdrawal would look like, and it is otherwise
-          // indistinguishable from an ordinary write failure.
+          // A 404 or 405 means the endpoint is gone rather than the write being
+          // rejected, and the two are otherwise indistinguishable here.
           if (err instanceof HttpError && (err.status === 404 || err.status === 405)) {
             log.warn(
               { status: err.status, endpoint: '/scrobble/pause' },
-              'Trakt rejected the undocumented resume-position endpoint; resume positions are no longer being written',
+              'Trakt no longer serves the resume-position endpoint; resume positions are not being written',
             );
           }
+          // Every other provider explains a failed write through the result;
+          // a bare count gives the user nothing to act on.
+          result.note ??= describeProviderError('trakt', err);
           result.failed++;
         }
       }
