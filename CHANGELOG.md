@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/IbbyLabs/watchbridge/compare/v0.9.3...v0.10.0) (2026-08-16)
+
+
+### Features
+
+* **sync:** log the shape of delivered watch dates (BUG-254) ([d95df5b](https://github.com/IbbyLabs/watchbridge/commit/d95df5bd245d397a5f46ce9f68706988b89200ab))
+
 ## [0.9.3](https://github.com/IbbyLabs/watchbridge/compare/v0.9.2...v0.9.3) (2026-08-15)
 
 
