@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/IbbyLabs/watchbridge/compare/v0.10.0...v0.10.1) (2026-08-16)
+
+
+### Bug Fixes
+
+* **trakt:** keep a reason for a failed resume-position write ([8981902](https://github.com/IbbyLabs/watchbridge/commit/898190244e16e4cd1a1651b4a67915345e1d099d))
+* **trakt:** warn if the resume-position endpoint is withdrawn ([4aab54b](https://github.com/IbbyLabs/watchbridge/commit/4aab54b0d7423a84bfe5e608df51c8fe49edec84))
+
 ## [0.10.0](https://github.com/IbbyLabs/watchbridge/compare/v0.9.3...v0.10.0) (2026-08-16)
 
 
