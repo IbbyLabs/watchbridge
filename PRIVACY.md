@@ -53,7 +53,7 @@ Nothing is collected for advertising, and there is no analytics or tracking.
 
 ## Contact
 
-Reach the operator on Discord: <https://discord.gg/wPY2pcqjmm>, or by direct
+Reach the operator on Discord: <https://discord.ibbylabs.dev>, or by direct
 message to `@ibbys89`.
 
 ## Changes
