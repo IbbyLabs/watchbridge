@@ -1,4 +1,5 @@
 import { HttpClient, HttpError } from './http.js';
+import { createLogger } from '../logger.js';
 import { sharedRateGate, type RateGate } from './rateGate.js';
 import {
   emptyPushResult,
@@ -12,6 +13,8 @@ import {
   type WatchEvent,
   type WatchlistEvent,
 } from './types.js';
+
+const log = createLogger('trakt');
 
 /** Backstop on paging, so a misbehaving endpoint cannot spin indefinitely. */
 const MAX_PAGES = 200;
@@ -458,7 +461,18 @@ export class TraktClient {
       } catch (err) {
         // 409 = a scrobble for this item is already in progress; treat as applied.
         if (err instanceof HttpError && err.status === 409) result.added++;
-        else result.failed++;
+        else {
+          // /scrobble/pause is absent from Trakt's published API. A 404 or 405
+          // is what its withdrawal would look like, and it is otherwise
+          // indistinguishable from an ordinary write failure.
+          if (err instanceof HttpError && (err.status === 404 || err.status === 405)) {
+            log.warn(
+              { status: err.status, endpoint: '/scrobble/pause' },
+              'Trakt rejected the undocumented resume-position endpoint; resume positions are no longer being written',
+            );
+          }
+          result.failed++;
+        }
       }
     }
     return result;
