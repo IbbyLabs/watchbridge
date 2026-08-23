@@ -52,8 +52,8 @@ export function WatchDatesNotice() {
   return (
     <Card className="mb-6 p-4 text-sm">
       <p className="text-ink">
-        History we sent to Simkl or MDBList before August may carry the date it was sent rather
-        than the date you watched it.
+        History we sent to Simkl or MDBList may carry the date it was sent rather than the date
+        you watched it.
       </p>
       <p className="mt-1 text-muted">
         Syncing again will not put it right — Simkl treats a repeat as nothing to do. There is a
