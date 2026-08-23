@@ -42,6 +42,28 @@ describe('DeliveriesStore', () => {
     await store.record('s1', 'u1', 'simkl', [{ kind: 'movie', ids: {}, title: 'No Id' }]);
     expect(await store.load('s1', 'simkl')).toHaveLength(3); // unchanged
   });
+
+  // The watch-date notice is gated on this. Answering true for somebody we
+  // never wrote to would put a warning in front of a person with nothing wrong;
+  // answering false for somebody we did leaves their history wrong for good.
+  describe('hasAnyFor', () => {
+    it('is true for a provider this person was delivered to', async () => {
+      expect(await store.hasAnyFor('u1', ['simkl', 'mdblist'])).toBe(true);
+    });
+
+    it('is false for providers this person was never delivered to', async () => {
+      expect(await store.hasAnyFor('u1', ['mdblist'])).toBe(false);
+    });
+
+    it('is false for a different person, on the same rows', async () => {
+      await db.orm.insert(users).values({ id: 'u2', email: 'v@e.com', passwordHash: 'x' });
+      expect(await store.hasAnyFor('u2', ['simkl', 'mdblist'])).toBe(false);
+    });
+
+    it('is false when asked about nothing', async () => {
+      expect(await store.hasAnyFor('u1', [])).toBe(false);
+    });
+  });
 });
 
 describe('DeliveriesStore data-type scoping and forget', () => {

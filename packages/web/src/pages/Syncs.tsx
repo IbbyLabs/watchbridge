@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { WatchDatesNotice } from '../components/WatchDatesNotice.tsx';
 import { api } from '../lib/api.ts';
 import {
   PROVIDER_LABEL,
@@ -71,6 +72,8 @@ export function Syncs() {
           <IconPlus /> New sync
         </Button>
       </header>
+
+      <WatchDatesNotice />
 
       {loading ? (
         <div className="flex justify-center py-16 text-muted">

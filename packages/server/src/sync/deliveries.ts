@@ -62,6 +62,29 @@ export class DeliveriesStore {
     return out;
   }
 
+  /**
+   * Whether this person has ever had history delivered to one of these targets.
+   *
+   * A necessary condition for the watch-date repair applying to them: nothing
+   * can have been dated wrongly somewhere we never wrote. One row settles it,
+   * so it asks for one rather than counting.
+   */
+  async hasAnyFor(userId: string, targets: string[], dataType: DataType = 'history'): Promise<boolean> {
+    if (targets.length === 0) return false;
+    const rows = await this.db.orm
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(
+        and(
+          eq(deliveries.userId, userId),
+          inArray(deliveries.target, targets),
+          eq(deliveries.dataType, dataType),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
   /** Record newly-delivered refs. Idempotent — re-recording the same item is a no-op. */
   async record(
     syncId: string,

@@ -22,12 +22,25 @@ const AFFECTED = new Set(['simkl', 'mdblist']);
  */
 export function repairRoutes(app: FastifyInstance, db: Db, connections: ConnectionService): void {
   const auth = { preHandler: requireAuth };
-  const repair = new DateRepair(connections, new DeliveriesStore(db), db);
+  const deliveries = new DeliveriesStore(db);
+  const repair = new DateRepair(connections, deliveries, db);
 
   const mine = async (userId: string) =>
     (await db.orm.select().from(syncs).where(eq(syncs.userId, userId))).filter((s) =>
       AFFECTED.has(s.target),
     );
+
+  /**
+   * Whether the repair is worth offering this person, asking no provider
+   * anything.
+   *
+   * The check below pulls both accounts in full to count what is wrong, which is
+   * far too much for a page load. This answers the necessary condition from one
+   * indexed row instead. The number still comes from the check.
+   */
+  app.get('/api/repair/watch-dates/relevant', auth, async (request) => {
+    return { relevant: await deliveries.hasAnyFor(request.user!.id, [...AFFECTED]) };
+  });
 
   /** What a repair would do, having done none of it. */
   app.get('/api/repair/watch-dates', auth, async (request) => {

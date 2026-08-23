@@ -58,6 +58,11 @@ describe('the repair routes are reachable', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('answers the relevance check with a challenge rather than a 404', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/repair/watch-dates/relevant' });
+    expect(res.statusCode).toBe(401);
+  });
+
   it('answers the run with a challenge rather than a 404', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/repair/watch-dates' });
     expect(res.statusCode).toBe(401);
