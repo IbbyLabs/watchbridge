@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.0](https://github.com/IbbyLabs/watchbridge/compare/v0.10.1...v0.11.0) (2026-08-23)
+
+
+### Features
+
+* **web:** point people at the watch-date repair from the syncs page ([7bdcd50](https://github.com/IbbyLabs/watchbridge/commit/7bdcd500cefb5b7d847900532f63a5c49e5fb347))
+* **web:** say how long a watch-date repair takes before it starts ([47bdda8](https://github.com/IbbyLabs/watchbridge/commit/47bdda8cb51b39a595867b974e83dd95444e7457))
+
+
+### Bug Fixes
+
+* **web:** drop the date from the watch-date notice ([9588192](https://github.com/IbbyLabs/watchbridge/commit/958819260a73f52745c1c379307a20803071f91e))
+
 ## [0.10.1](https://github.com/IbbyLabs/watchbridge/compare/v0.10.0...v0.10.1) (2026-08-16)
 
 
