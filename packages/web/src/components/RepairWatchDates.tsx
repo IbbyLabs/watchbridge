@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../lib/api.ts';
 import { Button, Card } from './ui.tsx';
+import { roughDuration } from '../lib/duration.ts';
 
 /**
  * The one-time repair for history we sent with the wrong watch date.
@@ -137,10 +138,18 @@ export function RepairWatchDates() {
               </p>
             ))}
             {toFix > 0 && (
-              <p className="mt-3">
-                {toFix} {toFix === 1 ? 'date needs' : 'dates need'} correcting. On Simkl this means
-                removing each one and adding it back, because Simkl will not change a date in place.
-              </p>
+              <>
+                <p className="mt-3">
+                  {toFix} {toFix === 1 ? 'date needs' : 'dates need'} correcting. On Simkl this means
+                  removing each one and adding it back, because Simkl will not change a date in place.
+                </p>
+                <p className="mt-2 text-muted">
+                  That is {roughDuration(toFix)}. Simkl accepts about one write a second, so the
+                  page works through them in batches and asks again on its own until it is done —
+                  leave the tab open. Stopping partway is safe: the rest are untouched and the next
+                  press carries on.
+                </p>
+              </>
             )}
           </div>
         )}
