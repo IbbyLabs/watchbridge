@@ -72,7 +72,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const limiter = new RateLimiter();
   healthRoutes(app, db, config);
   authRoutes(app, auth, limiter, config);
-  accountRoutes(app, db);
+  accountRoutes(app, db, auth, limiter, config);
   connectionRoutes(app, connectionService, connectionStore, config);
   syncRoutes(app, db, scheduler, config);
   repairRoutes(app, db, connectionService);

@@ -1,14 +1,16 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api.ts';
 import { useSession } from '../lib/session.tsx';
 import { Button, Card, Field, Input } from '../components/ui.tsx';
-import { IconLogout } from '../components/icons.tsx';
+import { IconLogout, IconTrash } from '../components/icons.tsx';
 import { RepairWatchDates } from '../components/RepairWatchDates.tsx';
 
 export function Settings() {
   const { user, setUser } = useSession();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const emailStatus = searchParams.get('email');
 
   const logout = async () => {
     await api.post('/api/auth/logout');
@@ -22,17 +24,32 @@ export function Settings() {
         <h1 className="text-xl font-semibold text-ink">Settings</h1>
       </header>
 
+      {emailStatus === '1' && (
+        <p role="status" className="mb-4 rounded-lg bg-success/15 px-3 py-2 text-sm text-success">
+          Email updated.
+        </p>
+      )}
+      {emailStatus === '0' && (
+        <p role="alert" className="mb-4 rounded-lg bg-danger/15 px-3 py-2 text-sm text-danger">
+          That email change link is invalid or expired.
+        </p>
+      )}
+
       <Card className="divide-y divide-border">
         <Row label="Email" value={user?.email ?? '—'} />
         <Row label="Username" value={user?.username ?? '—'} />
         {user?.isAdmin && <Row label="Role" value="Admin" />}
       </Card>
 
+      <ChangeEmail />
+
       <ChangePassword />
 
       <RepairWatchDates />
 
       <ExportData />
+
+      <DeleteAccount />
 
       <div className="mt-8">
         <Button variant="secondary" onClick={logout}>
@@ -155,6 +172,116 @@ function ChangePassword() {
           )}
           <Button type="submit" loading={loading}>
             Update password
+          </Button>
+        </form>
+      </Card>
+    </section>
+  );
+}
+
+function ChangeEmail() {
+  const [next, setNext] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setDone(false);
+    setLoading(true);
+    try {
+      await api.post('/api/account/email', { password, email: next });
+      setDone(true);
+      setNext('');
+      setPassword('');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Something went wrong');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="mt-8">
+      <h2 className="mb-3 text-sm font-semibold text-ink">Change email</h2>
+      <Card className="p-5">
+        <form onSubmit={submit} className="space-y-4">
+          <Field label="New email">
+            <Input type="email" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="email" required />
+          </Field>
+          <Field label="Current password" hint="Required to change your email." error={error ?? undefined}>
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </Field>
+          {done && (
+            <p role="status" className="rounded-lg bg-success/15 px-3 py-2 text-sm text-success">
+              Confirmation sent — click the link in that email to finish.
+            </p>
+          )}
+          <Button type="submit" loading={loading}>
+            Change email
+          </Button>
+        </form>
+      </Card>
+    </section>
+  );
+}
+
+function DeleteAccount() {
+  const { setUser } = useSession();
+  const navigate = useNavigate();
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (confirm !== 'DELETE') {
+      setError('Type DELETE to confirm');
+      return;
+    }
+    setLoading(true);
+    try {
+      await api.del('/api/account', { password });
+      setUser(null);
+      navigate('/login');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Something went wrong');
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="mt-8">
+      <h2 className="mb-3 text-sm font-semibold text-danger">Delete account</h2>
+      <Card className="border-danger/40 p-5">
+        <p className="text-sm text-muted">
+          This permanently removes your account, connections, syncs and history. There is no undo.
+        </p>
+        <form onSubmit={submit} className="mt-4 space-y-4">
+          <Field label="Current password" error={error ?? undefined}>
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </Field>
+          <Field label="Type DELETE to confirm">
+            <Input value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="off" required />
+          </Field>
+          <Button type="submit" variant="danger" loading={loading}>
+            <IconTrash /> Delete my account
           </Button>
         </form>
       </Card>

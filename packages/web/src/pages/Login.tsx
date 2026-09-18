@@ -10,6 +10,9 @@ export function Login() {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [unverified, setUnverified] = useState(false);
+  const [resent, setResent] = useState(false);
+  const [resending, setResending] = useState(false);
   const [loading, setLoading] = useState(false);
   const { setUser } = useSession();
   const navigate = useNavigate();
@@ -21,14 +24,34 @@ export function Login() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setUnverified(false);
+    setResent(false);
     try {
       const user = await api.post<User>('/api/auth/login', { identifier, password });
       setUser(user);
       navigate('/syncs');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong');
+      if (err instanceof ApiError) {
+        setError(err.message);
+        setUnverified(err.data.error === 'email_unverified');
+      } else {
+        setError('Something went wrong');
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const resend = async () => {
+    setResending(true);
+    setError(null);
+    try {
+      await api.post('/api/auth/verify/resend', { email: identifier });
+      setResent(true);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Something went wrong');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -65,6 +88,25 @@ export function Login() {
           Sign in
         </Button>
       </form>
+      {unverified && (
+        <p role="alert" className="mt-4 rounded-lg bg-danger/15 px-3 py-2 text-sm text-danger">
+          {resent ? (
+            <>Verification email sent — check your inbox.</>
+          ) : (
+            <>
+              Didn't get the verification email?{' '}
+              <button
+                type="button"
+                onClick={resend}
+                disabled={resending}
+                className="font-semibold underline hover:no-underline disabled:opacity-50"
+              >
+                {resending ? 'Sending…' : 'Resend it'}
+              </button>
+            </>
+          )}
+        </p>
+      )}
       <p className="mt-6 text-center text-sm text-muted">
         No account?{' '}
         <Link to="/register" className="font-medium text-brand-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded">

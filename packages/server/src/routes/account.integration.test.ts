@@ -5,10 +5,13 @@ import { createDb, type Db } from '../db/client.js';
 import type { Mailer } from '../mail/mailer.js';
 import { buildApp } from '../app.js';
 
-const captured: { verifyUrl?: string } = {};
+const captured: { verifyUrl?: string; confirmUrl?: string } = {};
 const mailer: Mailer = {
   async sendVerificationEmail(_to, url) {
     captured.verifyUrl = url;
+  },
+  async sendEmailChangeEmail(_to, url) {
+    captured.confirmUrl = url;
   },
   async verify() {
     return true;
@@ -138,5 +141,68 @@ describe('account export', () => {
     expect(doc.account.email).toBe('g@h.com');
     expect(doc.connections).toHaveLength(0);
     expect(doc.syncs).toHaveLength(0);
+  });
+});
+
+describe('account email change', () => {
+  it('rejects a change with the wrong password', async () => {
+    const res = await authed({
+      method: 'POST',
+      url: '/api/account/email',
+      payload: { password: 'wrong-password', email: 'new@example.com' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('invalid_password');
+  });
+
+  it('rejects an email that is already registered', async () => {
+    const res = await authed({
+      method: 'POST',
+      url: '/api/account/email',
+      payload: { password: 'correcthorse', email: 'g@h.com' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('email_taken');
+  });
+
+  it('sends a confirmation and applies it on confirm', async () => {
+    const res = await authed({
+      method: 'POST',
+      url: '/api/account/email',
+      payload: { password: 'correcthorse', email: 'erin.new@example.com' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('confirmation_sent');
+    expect(captured.confirmUrl).toBeDefined();
+
+    const token = new URL(captured.confirmUrl!).searchParams.get('token')!;
+    const confirm = await app.inject({ method: 'GET', url: `/api/account/email/confirm?token=${token}` });
+    expect(confirm.statusCode).toBe(302);
+    expect(confirm.headers.location).toContain('settings?email=1');
+
+    const me = await authed({ method: 'GET', url: '/api/auth/me' });
+    expect(me.json().email).toBe('erin.new@example.com');
+  });
+
+  it('rejects a reused email-change token', async () => {
+    const token = new URL(captured.confirmUrl!).searchParams.get('token')!;
+    const res = await app.inject({ method: 'GET', url: `/api/account/email/confirm?token=${token}` });
+    expect(res.headers.location).toContain('settings?email=0');
+  });
+});
+
+describe('account deletion', () => {
+  it('rejects deletion with the wrong password', async () => {
+    const res = await authed({ method: 'DELETE', url: '/api/account', payload: { password: 'nope' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('invalid_password');
+  });
+
+  it('deletes the account and invalidates the session', async () => {
+    const res = await authed({ method: 'DELETE', url: '/api/account', payload: { password: 'correcthorse' } });
+    expect(res.statusCode).toBe(200);
+
+    const me = await authed({ method: 'GET', url: '/api/auth/me' });
+    expect(me.statusCode).toBe(401);
   });
 });

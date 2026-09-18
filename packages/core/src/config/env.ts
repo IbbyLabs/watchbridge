@@ -59,12 +59,9 @@ const envSchema = z.object({
   // so a cursor that has silently stopped advancing self-heals. 0 turns it off.
   FULL_RECONCILE_INTERVAL_HOURS: z.coerce.number().int().min(0).default(168),
 
-  // SMTP
-  SMTP_HOST: z.string().optional(),
-  SMTP_PORT: z.coerce.number().int().positive().default(587),
-  SMTP_USER: z.string().optional(),
-  SMTP_PASS: z.string().optional(),
-  SMTP_SECURE: boolish(false), // true => implicit TLS (465); false => STARTTLS (587)
+  // Transactional email via Resend (https://resend.com). If the API key is
+  // missing, emails are logged instead of sent so local dev works offline.
+  RESEND_API_KEY: z.string().optional(),
   MAIL_FROM: z.string().default('Watchbridge <no-reply@localhost>'),
 
   // Providers (operator-registered apps)

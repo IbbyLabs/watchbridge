@@ -1,7 +1,10 @@
+import { z } from 'zod';
 import { desc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { createLogger } from '@watchbridge/core';
+import { createLogger, type AppConfig } from '@watchbridge/core';
+import { AuthError, type AuthService } from '../auth/service.js';
 import { requireAuth } from '../plugins/auth.js';
+import type { RateLimiter } from '../plugins/rateLimit.js';
 import type { Db } from '../db/client.js';
 import { connections, deliveries, syncRuns, syncs } from '../db/schema.js';
 import { parseDataTypes } from '../sync/runner.js';
@@ -11,7 +14,22 @@ const log = createLogger('account');
 /** Newest runs first, capped so one export cannot pull an unbounded history. */
 const MAX_RUNS = 500;
 
-export function accountRoutes(app: FastifyInstance, db: Db): void {
+const changeEmailBody = z.object({
+  password: z.string().min(1).max(200),
+  email: z.string().email().max(254),
+});
+
+const deleteBody = z.object({
+  password: z.string().min(1).max(200),
+});
+
+export function accountRoutes(
+  app: FastifyInstance,
+  db: Db,
+  authService: AuthService,
+  limiter: RateLimiter,
+  config: AppConfig,
+): void {
   const auth = { preHandler: requireAuth };
 
   /**
@@ -107,6 +125,93 @@ export function accountRoutes(app: FastifyInstance, db: Db): void {
       .header('content-disposition', `attachment; filename="watchbridge-export-${stamp}.json"`)
       .send(document);
   });
+
+  /**
+   * Start an email change. Authenticated and rate-limited per user; the new
+   * address is not applied until its confirmation link is opened.
+   */
+  app.post(
+    '/api/account/email',
+    {
+      preHandler: [
+        requireAuth,
+        limiter.middleware({
+          name: 'email-change',
+          max: 5,
+          windowMs: 3_600_000,
+          keyBy: (req) => req.user?.id ?? req.clientIp,
+        }),
+      ],
+    },
+    async (request, reply) => {
+      const parsed = changeEmailBody.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
+      }
+      try {
+        await authService.changeEmail(request.user!.id, parsed.data.password, parsed.data.email);
+        return reply.send({ status: 'confirmation_sent' });
+      } catch (err) {
+        return sendAuthError(reply, err);
+      }
+    },
+  );
+
+  // Public: the confirmation link arrives by email, so no auth (the token is
+  // the proof of mailbox ownership). Rate-limited like the verify link.
+  app.get(
+    '/api/account/email/confirm',
+    { preHandler: limiter.middleware({ name: 'email-change-confirm', max: 20, windowMs: 3_600_000 }) },
+    async (request, reply) => {
+      const token = z
+        .string()
+        .min(1)
+        .max(200)
+        .safeParse((request.query as { token?: string }).token);
+      if (!token.success) return reply.redirect(`${config.APP_URL}/settings?email=0`);
+      try {
+        await authService.confirmEmailChange(token.data);
+        return reply.redirect(`${config.APP_URL}/settings?email=1`);
+      } catch {
+        return reply.redirect(`${config.APP_URL}/settings?email=0`);
+      }
+    },
+  );
+
+  /** Delete the signed-in account. Requires the current password. */
+  app.delete(
+    '/api/account',
+    {
+      preHandler: [
+        requireAuth,
+        limiter.middleware({
+          name: 'account-delete',
+          max: 5,
+          windowMs: 3_600_000,
+          keyBy: (req) => req.user?.id ?? req.clientIp,
+        }),
+      ],
+    },
+    async (request, reply) => {
+      const parsed = deleteBody.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'invalid_input', issues: parsed.error.flatten() });
+      }
+      try {
+        await authService.deleteAccount(request.user!.id, parsed.data.password);
+        return reply.send({ status: 'deleted' });
+      } catch (err) {
+        return sendAuthError(reply, err);
+      }
+    },
+  );
+}
+
+function sendAuthError(reply: import('fastify').FastifyReply, err: unknown) {
+  if (err instanceof AuthError) {
+    return reply.code(err.status).send({ error: err.code, message: err.message });
+  }
+  throw err;
 }
 
 /** Stored JSON columns are returned as parsed values, or as null if unreadable. */

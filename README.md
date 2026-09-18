@@ -13,7 +13,7 @@ already synced, and never marks something watched unless the source actually say
 
 ## Run it
 
-Docker (Postgres + Redis + local mail capture):
+Docker (Postgres + Redis):
 
 ```bash
 cp .env.sample .env         # then fill APP_ENCRYPTION_KEY and SESSION_SECRET
@@ -21,7 +21,6 @@ docker compose up --build
 ```
 
 - App: http://localhost:8080
-- Captured emails (dev): http://localhost:8025
 
 Generate the two required secrets:
 
@@ -56,7 +55,7 @@ list. Notable ones:
 | `DATABASE_URL`         | `pglite://…` (embedded) or `postgres://…`                                           |
 | `TRUSTED_PROXIES`      | `cloudflare`, `loopback`, `private`, or explicit CIDRs — controls real-IP detection |
 | `REGISTRATION_ENABLED` | Toggle public sign-ups                                                              |
-| `SMTP_*` / `MAIL_FROM` | Outgoing mail for email verification                                                |
+| `RESEND_API_KEY` / `MAIL_FROM` | Outgoing mail (verification, password resets, alerts) via Resend              |
 | `TRAKT_*` / `SIMKL_*`  | Operator-registered OAuth app credentials                                           |
 
 Behind Cloudflare, set `TRUSTED_PROXIES=cloudflare` so per-IP rate limits use the real visitor IP

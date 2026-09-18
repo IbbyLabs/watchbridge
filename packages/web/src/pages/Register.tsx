@@ -12,6 +12,8 @@ export function Register() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resent, setResent] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,6 +29,19 @@ export function Register() {
     }
   };
 
+  const resend = async () => {
+    setResending(true);
+    setResent(false);
+    try {
+      await api.post('/api/auth/verify/resend', { email });
+      setResent(true);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Something went wrong');
+    } finally {
+      setResending(false);
+    }
+  };
+
   if (done) {
     return (
       <AuthShell title="Check your email" subtitle={`We sent a verification link to ${email}.`}>
@@ -34,6 +49,14 @@ export function Register() {
           <IconCheck className="mt-0.5 text-base" />
           <span>Click the link in that email to activate your account, then sign in.</span>
         </div>
+        <Button variant="secondary" onClick={resend} loading={resending} className="mt-4 w-full">
+          Resend verification email
+        </Button>
+        {resent && (
+          <p role="status" className="mt-2 text-center text-sm text-success">
+            Sent — check your inbox.
+          </p>
+        )}
         <p className="mt-6 text-center text-sm text-muted">
           <Link to="/login" className="font-medium text-brand-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg rounded">
             Back to sign in

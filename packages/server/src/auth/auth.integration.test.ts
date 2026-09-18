@@ -123,6 +123,53 @@ describe('auth flow', () => {
   });
 });
 
+describe('resending verification email', () => {
+  const bob = { email: 'bob@b.com', username: 'bob', password: 'hunter2hunter2' };
+
+  it('sends a fresh verification link for an unverified account', async () => {
+    const reg = await app.inject({ method: 'POST', url: '/api/auth/register', payload: bob });
+    expect(reg.statusCode).toBe(201);
+    const first = captured.verifyUrl!;
+
+    captured.verifyUrl = undefined;
+    const resend = await app.inject({
+      method: 'POST',
+      url: '/api/auth/verify/resend',
+      payload: { email: bob.email },
+    });
+    expect(resend.statusCode).toBe(200);
+    expect(resend.json().status).toBe('ok');
+    expect(captured.verifyUrl).toBeDefined();
+    expect(captured.verifyUrl).not.toBe(first);
+
+    const token = new URL(captured.verifyUrl!).searchParams.get('token')!;
+    const verify = await app.inject({ method: 'GET', url: `/api/auth/verify?token=${token}` });
+    expect(verify.headers.location).toContain('verified=1');
+  });
+
+  it('answers the same way for an unknown email (no enumeration)', async () => {
+    captured.verifyUrl = undefined;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/verify/resend',
+      payload: { email: 'ghost@nowhere.test' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(captured.verifyUrl).toBeUndefined();
+  });
+
+  it('answers the same way for an already-verified account', async () => {
+    captured.verifyUrl = undefined;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/verify/resend',
+      payload: { email: bob.email },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(captured.verifyUrl).toBeUndefined();
+  });
+});
+
 describe('password management', () => {
   async function loginAlice(password: string): Promise<string> {
     const res = await app.inject({

@@ -1,5 +1,6 @@
-import type { SVGProps } from 'react';
+import { useEffect, useState, type SVGProps } from 'react';
 import { IBBYLABS } from '../lib/brand.ts';
+import { fetchVersion } from '../lib/version.ts';
 
 function IconDiscord(p: SVGProps<SVGSVGElement>) {
   return (
@@ -45,13 +46,32 @@ const linkClass =
   'focus-visible:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg';
 
 export function Footer() {
+  const [version, setVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void fetchVersion().then((info) => {
+      if (active) setVersion(info?.version ?? null);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <footer className="mt-16 border-t border-border pt-6">
       <div className="flex flex-col items-center gap-4 text-xs sm:flex-row sm:justify-between">
-        <a href={IBBYLABS.siteUrl} target="_blank" rel="noreferrer" className={linkClass}>
-          <img src="/ibbylabs-logo.png" alt="" aria-hidden className="h-5 w-5 rounded-full" />
-          {IBBYLABS.developerCredit}
-        </a>
+        <div className="flex items-center gap-3">
+          <a href={IBBYLABS.siteUrl} target="_blank" rel="noreferrer" className={linkClass}>
+            <img src="/ibbylabs-logo.png" alt="" aria-hidden className="h-5 w-5 rounded-full" />
+            {IBBYLABS.developerCredit}
+          </a>
+          {version && (
+            <span className="text-faint" title="Watchbridge version">
+              v{version}
+            </span>
+          )}
+        </div>
         <nav className="flex items-center gap-4" aria-label="Contact and support">
           <a href={IBBYLABS.kofiUrl} target="_blank" rel="noreferrer" className={linkClass} title="Support on Ko-fi">
             <IconKofi /> Ko-fi

@@ -89,6 +89,19 @@ export function authRoutes(
   );
 
   app.post(
+    '/api/auth/verify/resend',
+    // Re-send a verification link. No auth because the account isn't verified
+    // yet; rate-limited and enumeration-safe like the forgot-password route.
+    { preHandler: limiter.middleware({ name: 'resend-verify', max: 5, windowMs: 3_600_000 }) },
+    async (request, reply) => {
+      const parsed = forgotBody.safeParse(request.body);
+      // Answer the same way regardless, so this can't probe which emails exist.
+      if (parsed.success) await auth.resendVerification(parsed.data.email);
+      return reply.send({ status: 'ok' });
+    },
+  );
+
+  app.post(
     '/api/auth/login',
     { preHandler: limiter.middleware({ name: 'login', max: 10, windowMs: 300_000 }) },
     async (request, reply) => {

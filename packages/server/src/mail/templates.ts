@@ -138,6 +138,28 @@ export function passwordResetEmail(appName: string, resetUrl: string): RenderedE
 }
 
 
+export function emailChangeEmail(appName: string, confirmUrl: string): RenderedEmail {
+  return {
+    subject: `Confirm your new ${appName} email`,
+    html: layout({
+      appName,
+      preheader: `Confirm this address to finish changing your ${appName} email.`,
+      heading: 'Confirm your new email',
+      bodyHtml: `<p style="margin:0 0 20px">You asked to change your ${appName} email to this address. Use the button below to confirm. This link expires in 1 hour and can be used once.</p>`,
+      cta: { label: 'Confirm email change', url: confirmUrl },
+      footerNote: `If you didn't request this change, you can safely ignore this email — your email will stay as it is.`,
+    }),
+    text: [
+      `You asked to change your ${appName} email to this address.`,
+      '',
+      `Confirm it by opening: ${confirmUrl}`,
+      '',
+      `This link expires in 1 hour and can be used once. If you didn't request this, you can ignore it.`,
+    ].join('\n'),
+  };
+}
+
+
 /** What a run alert needs, kept provider/detail-light so the email stays short. */
 export interface SyncAlert {
   syncName: string;

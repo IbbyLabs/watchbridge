@@ -14,10 +14,8 @@ services:
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       SESSION_SECRET: ${SESSION_SECRET}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-cloudflare}
-      # Local email capture via Mailhog (UI at http://localhost:8025).
-      SMTP_HOST: mailhog
-      SMTP_PORT: '1025'
-      SMTP_SECURE: 'false'
+      # Transactional email via Resend. Without a key, emails are logged only.
+      RESEND_API_KEY: ${RESEND_API_KEY}
       MAIL_FROM: Watchbridge <no-reply@localhost>
     depends_on:
       postgres:
@@ -43,11 +41,6 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-
-  mailhog:
-    image: mailhog/mailhog:latest
-    ports:
-      - '8025:8025'
 
 volumes:
   pgdata:

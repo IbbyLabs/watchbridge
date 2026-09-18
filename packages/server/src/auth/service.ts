@@ -3,6 +3,7 @@ import { and, eq, isNull, ne, or } from 'drizzle-orm';
 import { createLogger, safeEqual, type AppConfig } from '@watchbridge/core';
 import type { Db } from '../db/client.js';
 import {
+  emailChangeTokens,
   emailVerificationTokens,
   passwordResetTokens,
   sessions,
@@ -17,6 +18,7 @@ const log = createLogger('auth');
 
 const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const RESET_TTL_MS = 60 * 60 * 1000;
+const EMAIL_CHANGE_TTL_MS = 60 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type AuthErrorCode =
@@ -27,7 +29,8 @@ export type AuthErrorCode =
   | 'invalid_password'
   | 'email_unverified'
   | 'account_disabled'
-  | 'invalid_token';
+  | 'invalid_token'
+  | 'invalid_email';
 
 export class AuthError extends Error {
   constructor(
@@ -100,6 +103,20 @@ export class AuthService {
     });
     const url = `${this.config.APP_URL}/api/auth/verify?token=${token.raw}`;
     await this.mailer.sendVerificationEmail(email, url);
+  }
+
+  /**
+   * Re-send a verification link for an unverified account. Returns silently when
+   * the address doesn't exist or is already verified, so callers can't use it to
+   * probe which emails are registered.
+   */
+  async resendVerification(rawEmail: string): Promise<void> {
+    const email = rawEmail.trim().toLowerCase();
+    const [user] = await this.db.orm.select().from(users).where(eq(users.email, email)).limit(1);
+    if (!user || user.disabled || user.emailVerified) return;
+
+    await this.issueVerification(user.id, email);
+    log.info({ userId: user.id }, 'Verification email re-sent');
   }
 
   async verifyEmail(rawToken: string): Promise<void> {
@@ -197,6 +214,91 @@ export class AuthService {
       .where(eq(users.id, row.userId));
     await this.db.orm.delete(sessions).where(eq(sessions.userId, row.userId));
     log.info({ userId: row.userId }, 'Password reset completed');
+  }
+
+  /**
+   * Begin an email change. Requires the current password and a fresh address
+   * (never one another account owns). The new address only takes effect once
+   * its confirmation link is opened, so a hijacked session still can't move an
+   * account without both the password and access to the new mailbox.
+   */
+  async changeEmail(userId: string, currentPassword: string, newEmail: string): Promise<void> {
+    const [user] = await this.db.orm.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) throw new AuthError('invalid_credentials', 401, 'Account not found');
+    if (!(await verifyPassword(user.passwordHash, currentPassword))) {
+      throw new AuthError('invalid_password', 400, 'Current password is incorrect');
+    }
+
+    const email = newEmail.trim().toLowerCase();
+    if (email === user.email) {
+      throw new AuthError('invalid_email', 400, 'New email must be different from your current email');
+    }
+    const [taken] = await this.db.orm
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    if (taken) throw new AuthError('email_taken', 409, 'Email already registered');
+
+    const token = newOpaqueToken();
+    await this.db.orm.insert(emailChangeTokens).values({
+      id: randomUUID(),
+      userId,
+      newEmail: email,
+      tokenHash: token.hash,
+      expiresAt: new Date(Date.now() + EMAIL_CHANGE_TTL_MS),
+    });
+    const url = `${this.config.APP_URL}/api/account/email/confirm?token=${token.raw}`;
+    await this.mailer.sendEmailChangeEmail(email, url);
+    log.info({ userId }, 'Email change requested');
+  }
+
+  /** Complete an email change by consuming its single-use confirmation token. */
+  async confirmEmailChange(rawToken: string): Promise<void> {
+    const tokenHash = hashToken(rawToken);
+    const [row] = await this.db.orm
+      .select()
+      .from(emailChangeTokens)
+      .where(and(eq(emailChangeTokens.tokenHash, tokenHash), isNull(emailChangeTokens.consumedAt)))
+      .limit(1);
+
+    if (!row || row.expiresAt.getTime() < Date.now() || !safeEqual(row.tokenHash, tokenHash)) {
+      throw new AuthError('invalid_token', 400, 'Email change link is invalid or expired');
+    }
+
+    // Re-check uniqueness at apply time: the address may have been taken since the
+    // link was issued. The unique index is the backstop if a race slips through.
+    const [taken] = await this.db.orm
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, row.newEmail))
+      .limit(1);
+    if (taken && taken.id !== row.userId) {
+      throw new AuthError('email_taken', 409, 'That email is already registered');
+    }
+
+    await this.db.orm
+      .update(emailChangeTokens)
+      .set({ consumedAt: new Date() })
+      .where(eq(emailChangeTokens.id, row.id));
+    await this.db.orm
+      .update(users)
+      .set({ email: row.newEmail, updatedAt: new Date() })
+      .where(eq(users.id, row.userId));
+    log.info({ userId: row.userId }, 'Email changed');
+  }
+
+  /** Permanently delete an account after confirming the current password. */
+  async deleteAccount(userId: string, currentPassword: string): Promise<void> {
+    const [user] = await this.db.orm.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) throw new AuthError('invalid_credentials', 401, 'Account not found');
+    if (!(await verifyPassword(user.passwordHash, currentPassword))) {
+      throw new AuthError('invalid_password', 400, 'Current password is incorrect');
+    }
+    // Every other table references users with ON DELETE CASCADE, so removing the
+    // row tears down connections, syncs, runs, deliveries, tokens and sessions.
+    await this.db.orm.delete(users).where(eq(users.id, userId));
+    log.info({ userId }, 'Account deleted');
   }
 
   async login(identifier: string, password: string): Promise<User> {
