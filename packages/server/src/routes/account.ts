@@ -82,6 +82,7 @@ export function accountRoutes(
         filters: safeJson(s.filters),
         ratingsAuthority: s.ratingsAuthority,
         propagateWatchlistRemovals: s.propagateWatchlistRemovals,
+        propagateHistoryRemovals: s.propagateHistoryRemovals,
         enabled: s.enabled,
         createdAt: s.createdAt,
         lastRunAt: s.lastRunAt,

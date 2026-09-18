@@ -64,19 +64,67 @@ export function readRequestCount(source: unknown): number | undefined {
 }
 
 /**
- * Advance a delta cursor only when the source exposes a newer one (Simkl) AND
- * the history push had no failures — so a transient error never skips items.
+ * Advance per-surface delta cursors only when the surface exposes a newer one
+ * AND that surface's push had no failures — a transient error must never skip
+ * items on the next run.
  */
-function advanceCursor(
+export function advanceCursors(
   cursors: Record<string, string>,
-  key: string,
-  source: { lastActivityAll?: string },
+  provider: string,
+  source: {
+    lastActivityAll?: string;
+    lastProgressActivity?: string;
+    lastRatingsActivity?: string;
+    lastWatchlistActivity?: string;
+  },
   report: SyncReport,
 ): void {
-  const historyFailed = report.results.find((r) => r.dataType === 'history')?.failed ?? 0;
-  if (source.lastActivityAll && historyFailed === 0) {
-    cursors[key] = source.lastActivityAll;
+  const advance = (dataType: DataType, value: string | undefined): void => {
+    if (value === undefined) return;
+    const failed = report.results.find((r) => r.dataType === dataType)?.failed ?? 0;
+    if (failed === 0) cursors[`${provider}:${dataType}`] = value;
+  };
+  advance('history', source.lastActivityAll);
+  advance('progress', source.lastProgressActivity);
+  advance('ratings', source.lastRatingsActivity);
+  advance('watchlist', source.lastWatchlistActivity);
+}
+
+/**
+ * Surface items Simkl removed from its library (`removed_from_list` moved) when
+ * removal propagation is OFF. The drift must be visible, not silent.
+ */
+export function noteRemovals(
+  cursors: Record<string, string>,
+  provider: string,
+  source: { lastRemovedActivity?: string },
+  report: SyncReport,
+): void {
+  const latest = source.lastRemovedActivity;
+  if (typeof latest !== 'string') return;
+  const key = `${provider}:removed`;
+  const previous = cursors[key];
+  if (previous !== undefined && latest !== previous) {
+    const note = `${provider} removed items from its library since the last run. Watchbridge does not remove them from the target — they will stay on the other side.`;
+    const result = report.results.find((r) => r.dataType === 'history') ?? report.results[0];
+    if (result) result.note = result.note ? `${result.note} ${note}` : note;
   }
+}
+
+/**
+ * Advance the removal cursor only when the history surface reconciled cleanly
+ * (no failures) — otherwise the next run re-detects the same deletions.
+ */
+export function advanceRemoved(
+  cursors: Record<string, string>,
+  provider: string,
+  source: { lastRemovedActivity?: string },
+  report: SyncReport,
+): void {
+  const latest = source.lastRemovedActivity;
+  if (typeof latest !== 'string') return;
+  const failed = report.results.find((r) => r.dataType === 'history')?.failed ?? 0;
+  if (failed === 0) cursors[`${provider}:removed`] = latest;
 }
 
 /** Executes a sync configuration by wiring connected clients into the engine. */
@@ -128,6 +176,10 @@ export class SyncRunner {
     if (report.removedWatchlist?.length) {
       await this.deliveries.forget(sync.id, target, report.removedWatchlist, 'watchlist');
     }
+    // Removed history items leave the ledger for the same reason (opt-in).
+    if (report.removedHistory?.length) {
+      await this.deliveries.forget(sync.id, target, report.removedHistory);
+    }
   }
 
   async execute(sync: Sync, trigger: Trigger): Promise<RunOutcome> {
@@ -154,7 +206,10 @@ export class SyncRunner {
     // had just added on the other side, before the return pass could carry it over.
     const propagateWatchlistRemovals =
       sync.propagateWatchlistRemovals === true && sync.direction !== 'two_way';
-    const key = (provider: string) => `${provider}:history`;
+    const propagateHistoryRemovals =
+      sync.propagateHistoryRemovals === true && sync.direction !== 'two_way';
+    const key = (provider: string, dataType: DataType) => `${provider}:${dataType}`;
+    const removedCursor = (provider: string) => cursors[`${provider}:removed`] ?? null;
     const reports: SyncReport[] = [];
     const forwardDelivered = await this.deliveries.load(sync.id, sync.target);
     const forwardWatchlist = await this.deliveries.load(sync.id, sync.target, 'watchlist');
@@ -163,9 +218,10 @@ export class SyncRunner {
     // simply not needed, and stays "disabled" without anyone noticing.
     const guards = {
       deliveryMemory: forwardDelivered.length,
-      cursor: cursors[key(sync.source)] ? 'saved' : 'none',
+      cursor: cursors[key(sync.source, 'history')] ? 'saved' : 'none',
       filters: filters ? 'applied' : 'none',
       watchlistRemovals: propagateWatchlistRemovals ? 'on' : 'off',
+      historyRemovals: propagateHistoryRemovals ? 'on' : 'off',
       read: fullReconcile ? 'full' : 'delta',
       // What the source's history pull cost in requests. Rate limits are per
       // application credential, so this is the number a cursor reduces and the
@@ -179,14 +235,27 @@ export class SyncRunner {
         filters,
         ratingsAuthority,
         propagateWatchlistRemovals,
-        // On a reconciliation run, drop the cursor so the source re-reads everything.
-        since: fullReconcile ? null : (cursors[key(sync.source)] ?? null),
+        propagateHistoryRemovals,
+        // On a reconciliation run, drop the cursors so the source re-reads everything.
+        since: fullReconcile ? null : (cursors[key(sync.source, 'history')] ?? null),
+        sinceProgress: fullReconcile ? null : (cursors[key(sync.source, 'progress')] ?? null),
+        sinceRatings: fullReconcile ? null : (cursors[key(sync.source, 'ratings')] ?? null),
+        sinceWatchlist: fullReconcile ? null : (cursors[key(sync.source, 'watchlist')] ?? null),
+        removedSince: removedCursor(sync.source),
         deliveredHistory: forwardDelivered,
         deliveredWatchlist: forwardWatchlist,
       });
       reports.push(forward);
-      advanceCursor(cursors, key(sync.source), source, forward);
-      if (!preview) await this.persistDeliveries(sync, sync.target, forward);
+      advanceCursors(cursors, sync.source, source, forward);
+      if (!preview) {
+        if (propagateHistoryRemovals) {
+          advanceRemoved(cursors, sync.source, source, forward);
+        } else {
+          noteRemovals(cursors, sync.source, source, forward);
+          advanceRemoved(cursors, sync.source, source, forward);
+        }
+        await this.persistDeliveries(sync, sync.target, forward);
+      }
 
       if (sync.direction === 'two_way') {
         const back = await runSync(target, source, {
@@ -195,13 +264,26 @@ export class SyncRunner {
           filters,
           ratingsAuthority,
           propagateWatchlistRemovals,
-          since: fullReconcile ? null : (cursors[key(sync.target)] ?? null),
+          propagateHistoryRemovals,
+          since: fullReconcile ? null : (cursors[key(sync.target, 'history')] ?? null),
+          sinceProgress: fullReconcile ? null : (cursors[key(sync.target, 'progress')] ?? null),
+          sinceRatings: fullReconcile ? null : (cursors[key(sync.target, 'ratings')] ?? null),
+          sinceWatchlist: fullReconcile ? null : (cursors[key(sync.target, 'watchlist')] ?? null),
+          removedSince: removedCursor(sync.target),
           deliveredHistory: await this.deliveries.load(sync.id, sync.source),
           deliveredWatchlist: await this.deliveries.load(sync.id, sync.source, 'watchlist'),
         });
         reports.push(back);
-        advanceCursor(cursors, key(sync.target), target, back);
-        if (!preview) await this.persistDeliveries(sync, sync.source, back);
+        advanceCursors(cursors, sync.target, target, back);
+        if (!preview) {
+          if (propagateHistoryRemovals) {
+            advanceRemoved(cursors, sync.target, target, back);
+          } else {
+            noteRemovals(cursors, sync.target, target, back);
+            advanceRemoved(cursors, sync.target, target, back);
+          }
+          await this.persistDeliveries(sync, sync.source, back);
+        }
       }
     } catch (err) {
       // Stored on the run and shown to the user, so it has to read as a sentence
@@ -235,7 +317,7 @@ export class SyncRunner {
     outcome = {
       ...outcome,
       reports: outcome.reports.map(
-        ({ deliveredHistory: _d, deliveredWatchlist: _w, removedWatchlist: _r, ...r }) => r,
+        ({ deliveredHistory: _d, deliveredWatchlist: _w, removedWatchlist: _r, removedHistory: _h, ...r }) => r,
       ),
     };
 

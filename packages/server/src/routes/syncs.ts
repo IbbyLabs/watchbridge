@@ -46,6 +46,7 @@ const createBody = z
     filters: filters.nullable().optional(),
     ratingsAuthority: provider.nullable().optional(),
     propagateWatchlistRemovals: z.boolean().optional(),
+    propagateHistoryRemovals: z.boolean().optional(),
   })
   .refine((v) => v.source !== v.target, {
     message: 'source and target must differ',
@@ -59,6 +60,11 @@ const createBody = z
     message:
       'a two-way sync cannot propagate watchlist removals: an item just added on one side is indistinguishable from one removed on the other',
     path: ['propagateWatchlistRemovals'],
+  })
+  .refine((v) => v.direction !== 'two_way' || v.propagateHistoryRemovals !== true, {
+    message:
+      'a two-way sync cannot propagate history removals: an item just added on one side is indistinguishable from one removed on the other',
+    path: ['propagateHistoryRemovals'],
   });
 
 const patchBody = z.object({
@@ -69,6 +75,7 @@ const patchBody = z.object({
   filters: filters.nullable().optional(),
   ratingsAuthority: provider.nullable().optional(),
   propagateWatchlistRemovals: z.boolean().optional(),
+  propagateHistoryRemovals: z.boolean().optional(),
   enabled: z.boolean().optional(),
 });
 
@@ -115,6 +122,7 @@ function toPublic(s: Sync, now = Date.now()) {
     filters: parseFilters(s.filters),
     ratingsAuthority: s.ratingsAuthority,
     propagateWatchlistRemovals: s.propagateWatchlistRemovals,
+    propagateHistoryRemovals: s.propagateHistoryRemovals,
     enabled: s.enabled,
     lastRunAt: s.lastRunAt,
     lastRunStatus: s.lastRunStatus,
@@ -171,6 +179,8 @@ export function syncRoutes(
       ratingsAuthority: data.dataTypes.includes('ratings') ? (data.ratingsAuthority ?? null) : null,
       propagateWatchlistRemovals:
         data.dataTypes.includes('watchlist') && data.propagateWatchlistRemovals === true,
+      propagateHistoryRemovals:
+        data.dataTypes.includes('history') && data.propagateHistoryRemovals === true,
     });
     const [row] = await db.orm.select().from(syncs).where(eq(syncs.id, id)).limit(1);
     return reply.code(201).send(toPublic(row!));
@@ -206,6 +216,10 @@ export function syncRoutes(
       d.propagateWatchlistRemovals !== undefined
         ? d.propagateWatchlistRemovals
         : existing.propagateWatchlistRemovals;
+    const nextHistoryRemovals =
+      d.propagateHistoryRemovals !== undefined
+        ? d.propagateHistoryRemovals
+        : existing.propagateHistoryRemovals;
     const nextDirection = d.direction ?? existing.direction;
     if (nextRemovals === true && nextDirection === 'two_way') {
       return reply.code(400).send({
@@ -214,7 +228,15 @@ export function syncRoutes(
           'a two-way sync cannot propagate watchlist removals: an item just added on one side is indistinguishable from one removed on the other',
       });
     }
+    if (nextHistoryRemovals === true && nextDirection === 'two_way') {
+      return reply.code(400).send({
+        error: 'invalid_input',
+        message:
+          'a two-way sync cannot propagate history removals: an item just added on one side is indistinguishable from one removed on the other',
+      });
+    }
     const removalsValue = nextDataTypes.includes('watchlist') && nextRemovals === true;
+    const historyRemovalsValue = nextDataTypes.includes('history') && nextHistoryRemovals === true;
 
     await db.orm
       .update(syncs)
@@ -231,6 +253,9 @@ export function syncRoutes(
           : {}),
         ...(d.dataTypes !== undefined || d.propagateWatchlistRemovals !== undefined
           ? { propagateWatchlistRemovals: removalsValue }
+          : {}),
+        ...(d.dataTypes !== undefined || d.propagateHistoryRemovals !== undefined
+          ? { propagateHistoryRemovals: historyRemovalsValue }
           : {}),
         ...(d.enabled !== undefined ? { enabled: d.enabled } : {}),
         updatedAt: new Date(),

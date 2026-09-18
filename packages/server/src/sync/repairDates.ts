@@ -119,6 +119,12 @@ interface RepairClient {
   pullHistory(): Promise<WatchEvent[]>;
   pushHistory(events: WatchEvent[]): Promise<unknown>;
   removeHistory?(events: WatchEvent[]): Promise<unknown>;
+  /**
+   * Correct a play's date in place where the provider supports it (PublicMetaDB).
+   * Returns false when it could not be done that way, so the caller falls back to
+   * remove-and-add. Absent on providers with no in-place edit.
+   */
+  updateWatchDate?(ref: MediaRef, watchedAt: string): Promise<boolean>;
 }
 
 export class DateRepair {
@@ -304,6 +310,10 @@ export class DateRepair {
     const mustRemove = target !== 'mdblist';
 
     try {
+      // Prefer an in-place date edit where the provider supports it (PMDB): it is
+      // non-destructive, so no remove/intent bookkeeping is needed at all.
+      if (client.updateWatchDate && (await client.updateWatchDate(ref, wanted))) return 'written';
+
       if (mustRemove) {
         if (!client.removeHistory) return `${target} cannot remove history, so the date cannot be corrected`;
         await this.db.orm.insert(repairIntents).values({

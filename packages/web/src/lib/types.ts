@@ -55,6 +55,7 @@ export interface Sync {
   filters: SyncFilters | null;
   ratingsAuthority: ProviderId | null;
   propagateWatchlistRemovals: boolean;
+  propagateHistoryRemovals: boolean;
   enabled: boolean;
   lastRunAt: string | null;
   lastRunStatus: 'success' | 'partial' | 'error' | null;

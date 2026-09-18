@@ -175,6 +175,7 @@ function SyncCard({ sync, onChange }: { sync: Sync; onChange: () => void }) {
           <Pill tone="neutral">ratings from {PROVIDER_LABEL[sync.ratingsAuthority]}</Pill>
         )}
         {sync.propagateWatchlistRemovals && <Pill tone="neutral">watchlist removals on</Pill>}
+        {sync.propagateHistoryRemovals && <Pill tone="neutral">history removals on</Pill>}
         {sync.stalled && <Pill tone="danger">Stalled — not running on schedule</Pill>}
         <LastRunPill sync={sync} now={now} />
         <div className="ml-auto flex items-center gap-2">
@@ -375,12 +376,14 @@ function CreateSyncModal({
   const [syncSpecials, setSyncSpecials] = useState(true);
   const [ratingsAuthority, setRatingsAuthority] = useState<ProviderId | ''>('');
   const [propagateRemovals, setPropagateRemovals] = useState(false);
+  const [propagateHistoryRemovals, setPropagateHistoryRemovals] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const connectedIds = new Set(connections.map((c) => c.provider));
   const ratingsOn = types.includes('ratings');
   // Two-way removals would delete an item just added on the other side.
   const canPropagateRemovals = types.includes('watchlist') && direction === 'one_way';
+  const canPropagateHistoryRemovals = types.includes('history') && direction === 'one_way';
 
   const toggleType = (t: DataType) =>
     setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -411,6 +414,7 @@ function CreateSyncModal({
         dataTypes: types,
         ratingsAuthority: ratingsOn ? ratingsAuthority : null,
         propagateWatchlistRemovals: canPropagateRemovals && propagateRemovals,
+        propagateHistoryRemovals: canPropagateHistoryRemovals && propagateHistoryRemovals,
         direction,
         intervalMinutes: interval ? Number(interval) : null,
         filters: buildFilters(),
@@ -501,6 +505,22 @@ function CreateSyncModal({
                 className="h-4 w-4 rounded border-border accent-brand"
               />
               Remove items from the target when the source drops them
+            </label>
+          </Field>
+        )}
+        {canPropagateHistoryRemovals && (
+          <Field
+            label="History removals"
+            hint="Off, a title deleted on the source stays watched on the target. On, whole titles the source removed are also removed from the target. Per-episode un-watching is not propagated."
+          >
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={propagateHistoryRemovals}
+                onChange={(e) => setPropagateHistoryRemovals(e.target.checked)}
+                className="h-4 w-4 rounded border-border accent-brand"
+              />
+              Remove watched titles from the target when the source removes them
             </label>
           </Field>
         )}

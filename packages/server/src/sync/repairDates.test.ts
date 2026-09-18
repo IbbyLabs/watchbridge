@@ -188,6 +188,60 @@ describe('a provider that updates in place', () => {
   });
 });
 
+// PublicMetaDB can edit a single play's date in place, so the repair patches it
+// rather than removing and re-adding — which would drop the play for good if the
+// re-add failed.
+describe('a provider that can edit a date in place', () => {
+  it('patches instead of removing and re-adding', async () => {
+    await db.orm.delete(deliveries);
+    await db.orm.insert(deliveries).values({
+      id: 'd3',
+      syncId: 's1',
+      userId: 'u1',
+      target: 'pmdb',
+      dataType: 'history',
+      itemKey: itemKey(MOVIE)!,
+      ref: JSON.stringify(MOVIE),
+      createdAt: DELIVERED_AT,
+    });
+
+    const calls: string[] = [];
+    let stored: string | null = WRONG;
+    const target = {
+      async pullHistory(): Promise<WatchEvent[]> {
+        return stored === null ? [] : [{ ref: MOVIE, watchedAt: stored }];
+      },
+      async pushHistory(events: WatchEvent[]) {
+        calls.push('push');
+        stored = events[0]?.watchedAt ?? stored;
+        return { added: 1, skipped: 0, failed: 0, notFound: 0 };
+      },
+      async removeHistory() {
+        calls.push('remove');
+        stored = null;
+        return { added: 1, skipped: 0, failed: 0, notFound: 0 };
+      },
+      async updateWatchDate(_ref: unknown, at: string) {
+        calls.push('patch');
+        stored = at;
+        return true;
+      },
+    };
+    const source = fakeProvider(RIGHT);
+    const repair = new DateRepair(
+      { async clientFor(_u: string, p: string) { return p === 'pmdb' ? target : source; } } as never,
+      new DeliveriesStore(db),
+      db,
+    );
+
+    const result = await repair.run('u1', 's1', 'trakt', 'pmdb');
+
+    expect(calls).toEqual(['patch']);
+    expect(result.counts.repaired).toBe(1);
+    expect(stored).toBe(RIGHT);
+  });
+});
+
 // An item removed by an interrupted run is missing entirely, which is worse
 // than the wrong date this exists to fix. It goes back before anything else.
 describe('resuming after an interrupted run', () => {

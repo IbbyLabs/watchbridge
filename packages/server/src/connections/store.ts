@@ -20,6 +20,8 @@ export interface SimklCreds {
   /** V2 only: presence means this connection uses AUTH V2 + refresh. */
   refreshToken?: string;
   expiresAt?: number;
+  /** Plan tier (`free` | `pro` | `vip`) read at connect; future gating hook. */
+  accountType?: string;
 }
 export interface PmdbCreds {
   kind: 'pmdb';

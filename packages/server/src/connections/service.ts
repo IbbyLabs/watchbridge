@@ -163,7 +163,7 @@ export class ConnectionService {
     } else {
       const tokens = await this.newSimkl().exchangeCode(code, uri, entry.codeVerifier);
       const who = await this.whoIsSimkl(tokens.accessToken);
-      await this.store.upsert(currentUserId, 'simkl', who.label, this.simklCredsFrom(tokens), who.account);
+      await this.store.upsert(currentUserId, 'simkl', who.label, this.simklCredsFrom(tokens, who.accountType), who.account);
     }
     return entry.provider;
   }
@@ -221,14 +221,14 @@ export class ConnectionService {
       }
       this.simklDevices.remove(userCode);
       const who = await this.whoIsSimkl(res.accessToken);
-      await this.store.upsert(userId, 'simkl', who.label, this.simklCredsFrom(res), who.account);
+      await this.store.upsert(userId, 'simkl', who.label, this.simklCredsFrom(res, who.accountType), who.account);
       return 'connected';
     }
 
     const res = await this.newSimkl().pollPin(userCode);
     if (res === 'pending') return 'pending';
     const who = await this.whoIsSimkl(res);
-    await this.store.upsert(userId, 'simkl', who.label, { kind: 'simkl', accessToken: res }, who.account);
+    await this.store.upsert(userId, 'simkl', who.label, this.simklCredsFrom({ accessToken: res }, who.accountType), who.account);
     return 'connected';
   }
 
@@ -274,12 +274,16 @@ export class ConnectionService {
     const c = await this.store.getCreds(userId, 'simkl');
     if (!c || c.creds.kind !== 'simkl') return null;
     const version: 'v1' | 'v2' = c.creds.refreshToken ? 'v2' : 'v1';
+    // Keep the plan tier across a refresh, which otherwise rewrites the blob
+    // from the token alone and would drop it.
+    const accountType = c.creds.accountType;
     const client = this.newSimkl({
       accessToken: c.creds.accessToken,
       refreshToken: c.creds.refreshToken,
       expiresAt: c.creds.expiresAt,
       version,
-      onRefresh: (tokens) => this.store.updateCreds(c.id, { kind: 'simkl', ...tokens }),
+      onRefresh: (tokens) =>
+        this.store.updateCreds(c.id, { kind: 'simkl', ...tokens, ...(accountType ? { accountType } : {}) }),
     });
     return this.watchCredentials(client, c.id, 'simkl');
   }
@@ -287,13 +291,18 @@ export class ConnectionService {
   async pmdbFor(userId: string): Promise<PmdbClient | null> {
     const c = await this.store.getCreds(userId, 'pmdb');
     if (!c || c.creds.kind !== 'pmdb') return null;
-    return this.watchCredentials(new PmdbClient(c.creds.apiKey), c.id, 'pmdb');
+    return this.watchCredentials(new PmdbClient(c.creds.apiKey, this.appIdentity()), c.id, 'pmdb');
   }
 
   async mdblistFor(userId: string): Promise<MdblistClient | null> {
     const c = await this.store.getCreds(userId, 'mdblist');
     if (!c || c.creds.kind !== 'mdblist') return null;
-    return this.watchCredentials(new MdblistClient(c.creds.apiKey), c.id, 'mdblist');
+    return this.watchCredentials(new MdblistClient(c.creds.apiKey, this.appIdentity()), c.id, 'mdblist');
+  }
+
+  /** App name/version for provider User-Agent headers (`name/version`). */
+  private appIdentity(): { appName: string; appVersion: string } {
+    return { appName: this.config.APP_NAME, appVersion: this.config.APP_VERSION };
   }
 
   /**
@@ -349,10 +358,12 @@ export class ConnectionService {
     }
   }
 
-  private async whoIsSimkl(accessToken: string): Promise<{ label: string; account: string | null }> {
+  private async whoIsSimkl(
+    accessToken: string,
+  ): Promise<{ label: string; account: string | null; accountType?: string }> {
     try {
       const settings = await this.newSimkl({ accessToken }).getSettings();
-      return { label: settings.name ?? 'Simkl', account: settings.accountId ?? null };
+      return { label: settings.name ?? 'Simkl', account: settings.accountId ?? null, accountType: settings.accountType };
     } catch (err) {
       log.warn({ provider: 'simkl', err }, 'Could not read the account behind this connection');
       return { label: 'Simkl', account: null };
@@ -375,6 +386,8 @@ export class ConnectionService {
       clientSecret: this.config.TRAKT_CLIENT_SECRET!,
       tokens,
       onRefresh,
+      appName: this.config.APP_NAME,
+      appVersion: this.config.APP_VERSION,
     });
   }
 
@@ -402,12 +415,13 @@ export class ConnectionService {
     });
   }
 
-  /** Shape a Simkl token set for the credential blob. */
-  private simklCredsFrom(tokens: SimklTokens) {
+  /** Shape a Simkl token set (plus plan tier) for the credential blob. */
+  private simklCredsFrom(tokens: SimklTokens, accountType?: string) {
     return {
       kind: 'simkl' as const,
       accessToken: tokens.accessToken,
       ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt } : {}),
+      ...(accountType ? { accountType } : {}),
     };
   }
 }

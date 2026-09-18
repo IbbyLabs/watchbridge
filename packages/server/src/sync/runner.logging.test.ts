@@ -171,6 +171,7 @@ describe('the run line records which guards were in effect', () => {
       cursor: 'none',
       filters: 'applied',
       watchlistRemovals: 'off',
+      historyRemovals: 'off',
       read: 'delta',
     });
 
