@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/IbbyLabs/watchbridge/compare/v0.11.0...v1.0.0) (2026-09-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_SECURE are removed; configure RESEND_API_KEY instead.
+
+### Features
+
+* send mail via Resend and add self-service account management ([092c2ab](https://github.com/IbbyLabs/watchbridge/commit/092c2ab066d12c773fee079127430b8957afcd5f))
+
 ## [0.11.0](https://github.com/IbbyLabs/watchbridge/compare/v0.10.1...v0.11.0) (2026-08-23)
 
 
