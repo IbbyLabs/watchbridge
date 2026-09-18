@@ -97,6 +97,9 @@ export interface TraktConfig {
   onRefresh?: (tokens: TraktTokens) => Promise<void>;
   /** Override the process-wide pacer. Mainly so tests are not serialized by it. */
   gate?: RateGate;
+  /** App identity for the User-Agent header (Trakt asks for `name/version`). */
+  appName?: string;
+  appVersion?: string;
 }
 
 const toIds = (b: TraktIdBlock): ExternalIds => ({
@@ -107,16 +110,67 @@ const toIds = (b: TraktIdBlock): ExternalIds => ({
   ...(b.slug ? { slug: b.slug } : {}),
 });
 
+/**
+ * Which `/sync/last_activities` fields gate each surface. Kept to the sections we
+ * actually read, so an unrelated change (e.g. favourites) doesn't force a pull.
+ */
+const SURFACE_KEYS: Record<'history' | 'ratings' | 'watchlist' | 'progress', Array<[string, string]>> = {
+  history: [
+    ['movies', 'watched_at'],
+    ['episodes', 'watched_at'],
+  ],
+  ratings: [
+    ['movies', 'rated_at'],
+    ['shows', 'rated_at'],
+  ],
+  watchlist: [
+    ['movies', 'watchlisted_at'],
+    ['shows', 'watchlisted_at'],
+    // The aggregate, in case a list change is not mirrored onto the per-type field.
+    ['watchlist', 'updated_at'],
+  ],
+  progress: [
+    ['movies', 'paused_at'],
+    ['episodes', 'paused_at'],
+  ],
+};
+
+/** The newest timestamp among a surface's activity fields. */
+const latestIn = (
+  acts: Record<string, Record<string, string>> | undefined,
+  picks: Array<[string, string]>,
+): string | undefined => {
+  let best: string | undefined;
+  for (const [section, field] of picks) {
+    const value = acts?.[section]?.[field];
+    if (typeof value === 'string' && (best === undefined || value > best)) best = value;
+  }
+  return best;
+};
+
+/** `YYYY-MM-DD` for `start_at`, or undefined when there is no cursor to send. */
+const dayOf = (iso: string | null | undefined): string | undefined =>
+  typeof iso === 'string' && iso.length >= 10 ? iso.slice(0, 10) : undefined;
+
 export class TraktClient {
   readonly id = 'trakt' as const;
   /** Newest history activity seen on the last pull, for the next run's cursor. */
   lastActivityAll?: string;
+  /** Per-surface activity cursors, so only changed surfaces are re-read. */
+  lastProgressActivity?: string;
+  lastRatingsActivity?: string;
+  lastWatchlistActivity?: string;
   /** Set when the cursor said nothing changed, so an empty pull is not a loss. */
   lastPullSkipped = false;
+  lastProgressSkipped = false;
+  lastRatingsSkipped = false;
+  lastWatchlistSkipped = false;
   /** GETs the last pull cost, so the saving is measurable rather than asserted. */
   lastPullRequests = 0;
   private readonly http: HttpClient;
   private tokens?: TraktTokens;
+  /** `/sync/last_activities`, fetched once per client and reused per surface. */
+  private activitiesCache?: Record<string, Record<string, string>>;
 
   constructor(private readonly cfg: TraktConfig) {
     this.tokens = cfg.tokens;
@@ -125,13 +179,17 @@ export class TraktClient {
       // 1000 GET per 5 minutes (~3.3/sec) but only 1 write per second.
       minIntervalMs: 350,
       writeMinIntervalMs: 1_000,
+      // Trakt's Retry-After can be the whole 5-minute window; clamping it to the
+      // generic 60s cap would retry before Trakt said it was safe to.
+      maxBackoffMs: 300_000,
       // Trakt counts every request against the app's client_id, so pacing has to
       // span all of this process's Trakt clients, not just this one.
       gate: cfg.gate ?? sharedRateGate('trakt'),
       headers: {
         'trakt-api-version': '2',
         'trakt-api-key': cfg.clientId,
-        'user-agent': 'Watchbridge',
+        // Trakt documents this as `name/version`, not a bare name.
+        'user-agent': `${cfg.appName ?? 'Watchbridge'}/${cfg.appVersion ?? '0.1.0'}`,
       },
     });
   }
@@ -270,26 +328,34 @@ export class TraktClient {
 
   // ── Reads ────────────────────────────────────────────────────────
 
+  getLastActivities(): Promise<Record<string, Record<string, string>>> {
+    return this.authed((auth) => this.http.get('/sync/last_activities', { headers: auth }));
+  }
+
   /**
-   * The newest history timestamp, or undefined if the call fails. A failure
-   * falls through to a full pull rather than skipping one: a missed cursor costs
-   * requests, a wrongly-skipped pull costs a user their sync.
+   * Read `/sync/last_activities` once per client and refresh every surface cursor
+   * from it. A failed read is not fatal: each pull then falls through to a full
+   * re-read rather than wrongly skipping. Cursors and skip flags mirror the Simkl
+   * client, so the engine and runner treat both providers the same way.
    */
-  private async historyActivityAt(): Promise<string | undefined> {
+  private async activitiesSnapshot(): Promise<Record<string, Record<string, string>> | undefined> {
+    if (this.activitiesCache) return this.activitiesCache;
     try {
       this.lastPullRequests++;
       const acts = await this.getLastActivities();
-      const seen = [acts?.episodes?.watched_at, acts?.movies?.watched_at].filter(
-        (v): v is string => typeof v === 'string',
-      );
-      return seen.length === 0 ? undefined : seen.sort().at(-1);
+      this.activitiesCache = acts;
+      const history = latestIn(acts, SURFACE_KEYS.history);
+      if (history) this.lastActivityAll = history;
+      const ratings = latestIn(acts, SURFACE_KEYS.ratings);
+      if (ratings) this.lastRatingsActivity = ratings;
+      const watchlist = latestIn(acts, SURFACE_KEYS.watchlist);
+      if (watchlist) this.lastWatchlistActivity = watchlist;
+      const progress = latestIn(acts, SURFACE_KEYS.progress);
+      if (progress) this.lastProgressActivity = progress;
+      return acts;
     } catch {
       return undefined;
     }
-  }
-
-  getLastActivities(): Promise<Record<string, Record<string, string>>> {
-    return this.authed((auth) => this.http.get('/sync/last_activities', { headers: auth }));
   }
 
   /**
@@ -318,15 +384,20 @@ export class TraktClient {
     this.lastPullRequests = 0;
     this.lastPullSkipped = false;
 
-    const activity = await this.historyActivityAt();
-    if (activity) this.lastActivityAll = activity;
+    await this.activitiesSnapshot();
+    const activity = this.lastActivityAll;
     if (since && activity && since === activity) {
       this.lastPullSkipped = true;
       return [];
     }
 
-    const movies = await this.pageAll<TraktHistoryMovie>('/sync/history/movies');
-    const episodes = await this.pageAll<TraktHistoryEpisode>('/sync/history/episodes');
+    // Trakt has no `date_from`. `start_at` is day-granular (YYYY-MM-DD), so pass
+    // the cursor's day: that re-reads at most one day, never misses earlier
+    // same-day items, and avoids re-paging the whole library on every change.
+    const startAt = since ? dayOf(since) : undefined;
+    const window = startAt ? `?start_at=${startAt}` : '';
+    const movies = await this.pageAll<TraktHistoryMovie>(`/sync/history/movies${window}`);
+    const episodes = await this.pageAll<TraktHistoryEpisode>(`/sync/history/episodes${window}`);
     const out: WatchEvent[] = [];
     for (const m of movies) {
       out.push({
@@ -349,7 +420,13 @@ export class TraktClient {
     return out;
   }
 
-  async pullProgress(): Promise<ProgressEvent[]> {
+  async pullProgress(since?: string | null): Promise<ProgressEvent[]> {
+    await this.activitiesSnapshot();
+    this.lastProgressSkipped = false;
+    if (since && this.lastProgressActivity && since === this.lastProgressActivity) {
+      this.lastProgressSkipped = true;
+      return []; // unchanged — don't hit /sync/playback
+    }
     // extended=full adds `runtime` (minutes) so downstream targets that need a
     // resume position in milliseconds (PMDB) can reconstruct it.
     const items = await this.pageAll<TraktPlaybackItem>('/sync/playback?extended=full');
@@ -430,6 +507,64 @@ export class TraktClient {
     return result;
   }
 
+  /**
+   * Take items out of watched history. `POST /sync/history/remove` takes the same
+   * media-ids body as the watchlist writer; a bare show (no seasons) removes every
+   * episode of it. Counts come from what we sent minus what Trakt rejected, since
+   * the response envelope's counts do not distinguish movies from episodes.
+   */
+  async removeHistory(events: WatchEvent[]): Promise<PushResult> {
+    const result = emptyPushResult();
+    const movies: Array<Record<string, unknown>> = [];
+    const shows = new Map<string, { ids: ExternalIds; seasons: Map<number, Set<number>> }>();
+
+    for (const e of events) {
+      if (!hasWritableId(e.ref.ids)) {
+        result.notFound++;
+        continue;
+      }
+      if (e.ref.kind === 'movie') {
+        movies.push({ ids: writableIds(e.ref.ids) });
+      } else if (e.ref.kind === 'episode' && e.ref.season !== undefined && e.ref.number !== undefined) {
+        const key = idKey(e.ref.ids);
+        const show = shows.get(key) ?? { ids: writableIds(e.ref.ids), seasons: new Map() };
+        const eps = show.seasons.get(e.ref.season) ?? new Set<number>();
+        eps.add(e.ref.number);
+        show.seasons.set(e.ref.season, eps);
+        shows.set(key, show);
+      } else if (e.ref.kind === 'show') {
+        // Whole series — a bare show removes all of its episodes. This wins over
+        // any named episodes, which is the safe superset.
+        shows.set(idKey(e.ref.ids), { ids: writableIds(e.ref.ids), seasons: new Map() });
+      } else {
+        result.notFound++;
+      }
+    }
+
+    const showEntries = [...shows.values()].map((s) =>
+      s.seasons.size === 0
+        ? { ids: s.ids }
+        : {
+            ids: s.ids,
+            seasons: [...s.seasons.entries()].map(([number, eps]) => ({
+              number,
+              episodes: [...eps].map((n) => ({ number: n })),
+            })),
+          },
+    );
+
+    const sent = movies.length + showEntries.length;
+    if (sent === 0) return result;
+
+    const res = await this.authed<TraktListWriteResponse>((auth) =>
+      this.http.post('/sync/history/remove', { movies, shows: showEntries }, { headers: auth }),
+    );
+    const rejected = (res?.not_found?.movies?.length ?? 0) + (res?.not_found?.shows?.length ?? 0);
+    result.notFound += rejected;
+    result.added = sent - rejected;
+    return result;
+  }
+
   /** Write resume positions via `/scrobble/pause` (one call per item). */
   async pushProgress(events: ProgressEvent[]): Promise<PushResult> {
     const result = emptyPushResult();
@@ -481,9 +616,15 @@ export class TraktClient {
     return result;
   }
 
-  async pullRatings(): Promise<RatingEvent[]> {
+  async pullRatings(since?: string | null): Promise<RatingEvent[]> {
     // Movies and shows only. Trakt rates episodes by the episode's own id, which
     // an episode ref does not carry, so episode ratings are out of scope for now.
+    await this.activitiesSnapshot();
+    this.lastRatingsSkipped = false;
+    if (since && this.lastRatingsActivity && since === this.lastRatingsActivity) {
+      this.lastRatingsSkipped = true;
+      return []; // unchanged — don't hit /sync/ratings
+    }
     const movies = await this.pageAll<TraktRatingMovie>('/sync/ratings/movies');
     const shows = await this.pageAll<TraktRatingShow>('/sync/ratings/shows');
     const out: RatingEvent[] = [];
@@ -533,9 +674,15 @@ export class TraktClient {
     return result;
   }
 
-  async pullWatchlist(): Promise<WatchlistEvent[]> {
+  async pullWatchlist(since?: string | null): Promise<WatchlistEvent[]> {
     // Movies and shows only. A season or episode can sit on a Trakt watchlist,
     // but neither maps onto a whole-title watchlist entry elsewhere.
+    await this.activitiesSnapshot();
+    this.lastWatchlistSkipped = false;
+    if (since && this.lastWatchlistActivity && since === this.lastWatchlistActivity) {
+      this.lastWatchlistSkipped = true;
+      return []; // unchanged — don't hit the watchlist endpoints
+    }
     const movies = await this.pageAll<TraktWatchlistMovie>('/sync/watchlist/movies');
     const shows = await this.pageAll<TraktWatchlistShow>('/sync/watchlist/shows');
     const out: WatchlistEvent[] = [];

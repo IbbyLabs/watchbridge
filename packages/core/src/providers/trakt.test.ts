@@ -115,7 +115,7 @@ describe('Trakt pullProgress', () => {
         : { body: [] },
     );
     const events = await withTokens().pullProgress();
-    expect(calls[0]!.url).toContain('extended=full');
+    expect(calls.some((c) => c.url.includes('/sync/playback') && c.url.includes('extended=full'))).toBe(true);
     const movie = events.find((e) => e.ref.kind === 'movie')!;
     expect(movie.runtimeMs).toBe(139 * 60_000);
     expect(movie.positionMs).toBe(Math.round(0.5 * 139 * 60_000));
@@ -223,8 +223,8 @@ describe('paging is bounded and complete', () => {
     expect(out).toHaveLength(107);
     expect(calls.filter((c) => c.url.includes('/sync/playback'))).toHaveLength(2);
     // extended=full must survive the added paging params, or runtime is lost.
-    expect(calls[0].url).toContain('extended=full');
-    expect(calls[0].url).toContain('page=1');
+    const firstPage = calls.find((c) => c.url.includes('/sync/playback') && c.url.includes('page=1'))!;
+    expect(firstPage.url).toContain('extended=full');
   });
 
   it('stops instead of looping when an endpoint ignores the page parameter', async () => {
@@ -252,7 +252,8 @@ describe('paging is bounded and complete', () => {
 
     const out = await authed().pullProgress();
 
-    expect(calls).toHaveLength(1);
+    // One activities check, then one playback page (the endpoint ignored paging).
+    expect(calls.filter((c) => c.url.includes('/sync/playback'))).toHaveLength(1);
     expect(out).toHaveLength(250);
   });
 });
@@ -422,5 +423,147 @@ describe('TraktClient history cursor', () => {
 
     expect(c.lastPullSkipped).toBe(false);
     expect(calls.some((x) => x.url.includes('/sync/history'))).toBe(true);
+  });
+});
+
+describe('Trakt per-surface gating', () => {
+  const authed = () => new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
+
+  it('skips the watchlist read when watchlisted_at has not moved', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities')
+        ? { body: { movies: { watchlisted_at: '2026-01-01T00:00:00Z' }, shows: { watchlisted_at: '2026-01-01T00:00:00Z' } } }
+        : { body: [] },
+    );
+    const c = authed();
+    const out = await c.pullWatchlist('2026-01-01T00:00:00Z');
+
+    expect(out).toEqual([]);
+    expect(c.lastWatchlistSkipped).toBe(true);
+    expect(calls.filter((x) => x.url.includes('/sync/watchlist'))).toHaveLength(0);
+  });
+
+  it('reads the watchlist and records the cursor when it moved', async () => {
+    routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities') ? { body: { movies: { watchlisted_at: '2026-02-01T00:00:00Z' } } } : { body: [] },
+    );
+    const c = authed();
+    await c.pullWatchlist('2026-01-01T00:00:00Z');
+
+    expect(c.lastWatchlistSkipped).toBe(false);
+    expect(c.lastWatchlistActivity).toBe('2026-02-01T00:00:00Z');
+  });
+
+  it('skips the ratings read when rated_at has not moved', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities')
+        ? { body: { movies: { rated_at: '2026-03-01T00:00:00Z' }, shows: { rated_at: '2026-03-01T00:00:00Z' } } }
+        : { body: [] },
+    );
+    const c = authed();
+    const out = await c.pullRatings('2026-03-01T00:00:00Z');
+
+    expect(out).toEqual([]);
+    expect(c.lastRatingsSkipped).toBe(true);
+    expect(calls.filter((x) => x.url.includes('/sync/ratings'))).toHaveLength(0);
+  });
+
+  it('skips the playback read when paused_at has not moved', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities')
+        ? { body: { movies: { paused_at: '2026-04-01T00:00:00Z' }, episodes: { paused_at: '2026-04-01T00:00:00Z' } } }
+        : { body: [] },
+    );
+    const c = authed();
+    const out = await c.pullProgress('2026-04-01T00:00:00Z');
+
+    expect(out).toEqual([]);
+    expect(c.lastProgressSkipped).toBe(true);
+    expect(calls.filter((x) => x.url.includes('/sync/playback'))).toHaveLength(0);
+  });
+});
+
+describe('Trakt incremental history window', () => {
+  const authed = () => new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
+
+  it('sends start_at (day granularity) on an incremental pull', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities') ? { body: { movies: { watched_at: '2026-08-20T09:00:00Z' } } } : { body: [] },
+    );
+    await authed().pullHistory('2026-08-15T10:00:00Z');
+
+    const history = calls.filter((c) => c.url.includes('/sync/history'));
+    expect(history.length).toBeGreaterThan(0);
+    expect(history.every((c) => c.url.includes('start_at=2026-08-15'))).toBe(true);
+  });
+
+  it('omits start_at on a full pull', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities') ? { body: { movies: { watched_at: '2026-08-20T09:00:00Z' } } } : { body: [] },
+    );
+    await authed().pullHistory();
+
+    const history = calls.filter((c) => c.url.includes('/sync/history'));
+    expect(history.length).toBeGreaterThan(0);
+    expect(history.every((c) => !c.url.includes('start_at'))).toBe(true);
+  });
+});
+
+describe('Trakt identifies the app', () => {
+  it('sends User-Agent as name/version', async () => {
+    let seen: Record<string, string> = {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        seen = { ...(init?.headers as Record<string, string>) };
+        return new Response('{}', { status: 200 });
+      }),
+    );
+    const c = new TraktClient({
+      ...cfg,
+      appName: 'Watchbridge',
+      appVersion: '9.9.9',
+      tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() },
+    });
+    await c.getLastActivities();
+    expect(seen['user-agent']).toBe('Watchbridge/9.9.9');
+    expect(seen['trakt-api-version']).toBe('2');
+  });
+});
+
+describe('Trakt removeHistory', () => {
+  const authed = () => new TraktClient({ ...cfg, tokens: { accessToken: 'a', refreshToken: 'r', expiresAt: future() } });
+
+  it('posts movies and named episodes to /sync/history/remove', async () => {
+    const calls = routeFetch(() => ({ body: {} }));
+    const res = await authed().removeHistory([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null },
+      { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 1 }, watchedAt: null },
+      { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 2 }, watchedAt: null },
+    ]);
+
+    expect(res.added).toBe(2); // one movie + one show entry
+    const post = calls.find((c) => c.url.endsWith('/sync/history/remove'))!;
+    expect(post.method).toBe('POST');
+    expect(post.body).toEqual({
+      movies: [{ ids: { tmdb: 550 } }],
+      shows: [{ ids: { tmdb: 1399 }, seasons: [{ number: 1, episodes: [{ number: 1 }, { number: 2 }] }] }],
+    });
+  });
+
+  it('removes a whole show with a bare show entry', async () => {
+    const calls = routeFetch(() => ({ body: {} }));
+    await authed().removeHistory([{ ref: { kind: 'show', ids: { tmdb: 1399 } }, watchedAt: null }]);
+
+    const post = calls.find((c) => c.url.endsWith('/sync/history/remove'))!;
+    expect(post.body).toEqual({ movies: [], shows: [{ ids: { tmdb: 1399 } }] });
+  });
+
+  it('subtracts what Trakt says it could not find', async () => {
+    routeFetch(() => ({ body: { not_found: { movies: [{ ids: { tmdb: 999 } }], shows: [] } } }));
+    const res = await authed().removeHistory([{ ref: { kind: 'movie', ids: { tmdb: 999 } }, watchedAt: null }]);
+
+    expect(res.notFound).toBe(1);
+    expect(res.added).toBe(0);
   });
 });
