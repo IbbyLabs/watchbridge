@@ -11,7 +11,7 @@ import type {
 } from '../providers/types.js';
 import { createLogger } from '../logger.js';
 import { planHistorySync, planProgressSync, planRatingsSync, planWatchlistSync } from './plan.js';
-import { itemKey } from './identity.js';
+import { itemKey, sharesAnyId } from './identity.js';
 import { includedByFilters, type SyncFilters } from './filters.js';
 import { describeProviderError } from '../providers/errors.js';
 
@@ -23,15 +23,30 @@ export interface SyncSource {
   capabilities(): ProviderCapabilities;
   /** `since` is an optional delta cursor (Simkl activities timestamp); ignored by providers that don't page by date. */
   pullHistory(since?: string | null): Promise<WatchEvent[]>;
-  pullProgress(): Promise<ProgressEvent[]>;
+  pullProgress(since?: string | null): Promise<ProgressEvent[]>;
   /** Present only on providers that expose user ratings (Trakt, Simkl). */
-  pullRatings?(): Promise<RatingEvent[]>;
+  pullRatings?(since?: string | null): Promise<RatingEvent[]>;
   /** Present only on providers that expose a watchlist (Trakt, Simkl). */
-  pullWatchlist?(): Promise<WatchlistEvent[]>;
-  /** A newer delta cursor after a pull, if the provider tracks one (Simkl). */
+  pullWatchlist?(since?: string | null): Promise<WatchlistEvent[]>;
+  /**
+   * Full current library as title-level refs (movies + shows, ids only). Used to
+   * reconcile deletions: an item delivered to the target that is no longer in
+   * this set was removed on the source. Present only on providers that can
+   * enumerate their whole library cheaply (Simkl).
+   */
+  pullLibraryIds?(): Promise<MediaRef[]>;
+  /** Newer per-surface delta cursors after a pull, if the provider tracks them (Simkl). */
   readonly lastActivityAll?: string;
+  readonly lastProgressActivity?: string;
+  readonly lastRatingsActivity?: string;
+  readonly lastWatchlistActivity?: string;
+  /** Latest `removed_from_list` timestamp, if the provider reports deletions (Simkl). */
+  readonly lastRemovedActivity?: string;
   /** Set by providers that skip a pull when their cursor says nothing changed. */
   readonly lastPullSkipped?: boolean;
+  readonly lastProgressSkipped?: boolean;
+  readonly lastRatingsSkipped?: boolean;
+  readonly lastWatchlistSkipped?: boolean;
 }
 
 /** A provider we can read from and write to. */
@@ -78,7 +93,7 @@ export interface DataTypeReport {
   unmatched: number;
   notFound: number;
   failed: number;
-  /** Watchlist only, and only when removal propagation is switched on. */
+  /** Watchlist/history only, and only when removal propagation is switched on. */
   removed?: number;
   /** A sample of the items with no usable id, so the user can see what is stuck. */
   unmatchedItems?: ReportedItem[];
@@ -111,6 +126,11 @@ export interface SyncReport {
    * later returns to the source.
    */
   removedWatchlist?: MediaRef[];
+  /**
+   * History items removed from the target this run (history removal is opt-in).
+   * The caller drops these from the delivery ledger like `removedWatchlist`.
+   */
+  removedHistory?: MediaRef[];
   startedAt: string;
   finishedAt: string;
 }
@@ -121,6 +141,17 @@ export interface RunSyncOptions {
   preview: boolean;
   /** Delta cursor for the source's history pull (Simkl). */
   since?: string | null;
+  /** Per-surface delta cursors (Simkl activities timestamps for the other types). */
+  sinceProgress?: string | null;
+  sinceRatings?: string | null;
+  sinceWatchlist?: string | null;
+  /**
+   * When true, history items removed on the source are also removed from the
+   * target (opt-in, mirroring `propagateWatchlistRemovals`).
+   */
+  propagateHistoryRemovals?: boolean;
+  /** The source's `removed_from_list` cursor — used to detect deletions. */
+  removedSince?: string | null;
   /** Items already delivered to the target on prior runs; treated as present. */
   deliveredHistory?: MediaRef[];
   /** Watchlist items already delivered to the target on prior runs. */
@@ -154,6 +185,7 @@ export async function runSync(
   let deliveredHistory: MediaRef[] | undefined;
   let deliveredWatchlist: MediaRef[] | undefined;
   let removedWatchlist: MediaRef[] | undefined;
+  let removedHistory: MediaRef[] | undefined;
 
   // Each data type is isolated. One provider erroring must not discard the work
   // the earlier ones already wrote — in particular the history delivery memory,
@@ -161,13 +193,23 @@ export async function runSync(
   for (const dataType of options.dataTypes) {
     try {
       if (dataType === 'history') {
-        const { report, delivered } = await runHistory(source, target, options.preview, options.since, options.deliveredHistory, options.filters);
+        const { report, delivered, removed } = await runHistory(
+          source,
+          target,
+          options.preview,
+          options.since,
+          options.deliveredHistory,
+          options.filters,
+          options.propagateHistoryRemovals === true,
+          options.removedSince,
+        );
         results.push(report);
         if (delivered.length > 0) deliveredHistory = delivered;
+        if (removed.length > 0) removedHistory = removed;
       } else if (dataType === 'progress') {
-        results.push(await runProgress(source, target, options.preview, options.filters));
+        results.push(await runProgress(source, target, options.preview, options.filters, options.sinceProgress));
       } else if (dataType === 'ratings') {
-        results.push(await runRatings(source, target, options.preview, options.ratingsAuthority, options.filters));
+        results.push(await runRatings(source, target, options.preview, options.ratingsAuthority, options.filters, options.sinceRatings));
       } else if (dataType === 'watchlist') {
         const { report, delivered, removed } = await runWatchlist(
           source,
@@ -176,6 +218,7 @@ export async function runSync(
           options.propagateWatchlistRemovals === true,
           options.filters,
           options.deliveredWatchlist,
+          options.sinceWatchlist,
         );
         results.push(report);
         if (delivered.length > 0) deliveredWatchlist = delivered;
@@ -200,6 +243,7 @@ export async function runSync(
     deliveredHistory,
     deliveredWatchlist,
     removedWatchlist,
+    removedHistory,
     startedAt,
     finishedAt: now().toISOString(),
   };
@@ -259,7 +303,9 @@ async function runHistory(
   since?: string | null,
   delivered: MediaRef[] = [],
   filters?: SyncFilters,
-): Promise<{ report: DataTypeReport; delivered: MediaRef[] }> {
+  propagateRemovals = false,
+  removedSince?: string | null,
+): Promise<{ report: DataTypeReport; delivered: MediaRef[]; removed: MediaRef[] }> {
   // Source pull may use the delta cursor; the target pull always reflects current state.
   const [srcAll, tgt] = await Promise.all([source.pullHistory(since), target.pullHistory()]);
   const src = srcAll.filter((e) => includedByFilters(e.ref, filters));
@@ -292,15 +338,46 @@ async function runHistory(
     // mark it present forever even though it never landed.
     if (res.failed === 0) deliveredNow = acceptedRefs(plan.toAdd, res);
   }
+
+  let removedNow: MediaRef[] = [];
+  if (!preview && propagateRemovals && target.removeHistory && source.pullLibraryIds) {
+    // Detect title-level removals: Simkl's `removed_from_list` moved since the
+    // saved cursor, so fetch the current library and diff against what we have
+    // delivered. Only whole titles are reconciled — per-episode un-watching
+    // bumps a status bucket, not `removed_from_list`.
+    const moved =
+      typeof source.lastRemovedActivity === 'string' &&
+      removedSince != null &&
+      source.lastRemovedActivity !== removedSince;
+    if (moved && delivered.length > 0) {
+      const library = await source.pullLibraryIds();
+      const removed = delivered.filter((d) => {
+        const hasId = Object.values(d.ids).some((v) => v !== undefined && v !== null && v !== '');
+        return hasId && !library.some((t) => sharesAnyId(d.ids, t.ids));
+      });
+      if (removed.length > 0) {
+        const res = await target.removeHistory(removed.map((ref) => ({ ref, watchedAt: null })));
+        report.removed = res.added;
+        report.notFound += res.notFound;
+        report.failed += res.failed;
+        if (res.note) report.note = res.note;
+        if (res.failed === 0) removedNow = acceptedRefs(removed.map((ref) => ({ ref })), res);
+      }
+    }
+  }
+
   log.info({ source: source.id, target: target.id, preview, ...report }, 'history planned');
-  return { report, delivered: deliveredNow };
+  return { report, delivered: deliveredNow, removed: removedNow };
 }
 
-async function runProgress(source: SyncSource, target: SyncTarget, preview: boolean, filters?: SyncFilters): Promise<DataTypeReport> {
+async function runProgress(source: SyncSource, target: SyncTarget, preview: boolean, filters?: SyncFilters, since?: string | null): Promise<DataTypeReport> {
   if (!source.capabilities().progress) {
     return emptyReport('progress', `${source.id} does not expose playback progress`);
   }
-  const [srcAll, tgt] = await Promise.all([source.pullProgress(), target.pullProgress()]);
+  const [srcAll, tgt] = await Promise.all([source.pullProgress(since), target.pullProgress()]);
+  if (source.lastProgressSkipped === true) {
+    return emptyReport('progress', `${source.id} reported no playback changes since the last run`);
+  }
   const src = srcAll.filter((e) => includedByFilters(e.ref, filters));
   const plan = planProgressSync(src, tgt);
   const report: DataTypeReport = {
@@ -328,6 +405,7 @@ async function runRatings(
   preview: boolean,
   ratingsAuthority: ProviderId | undefined,
   filters?: SyncFilters,
+  since?: string | null,
 ): Promise<DataTypeReport> {
   if (!source.capabilities().ratings || !source.pullRatings) {
     return emptyReport('ratings', `${source.id} does not expose ratings`);
@@ -335,7 +413,10 @@ async function runRatings(
   if (!target.capabilities().ratings || !target.pushRatings || !target.pullRatings) {
     return emptyReport('ratings', `${target.id} does not accept ratings`);
   }
-  const [srcAll, tgt] = await Promise.all([source.pullRatings(), target.pullRatings()]);
+  const [srcAll, tgt] = await Promise.all([source.pullRatings(since), target.pullRatings()]);
+  if (source.lastRatingsSkipped === true) {
+    return emptyReport('ratings', `${source.id} reported no rating changes since the last run`);
+  }
   const src = srcAll.filter((e) => includedByFilters(e.ref, filters));
   // No authority set means the source may only fill gaps, never overwrite.
   const sourceIsAuthoritative = ratingsAuthority === source.id;
@@ -366,6 +447,7 @@ async function runWatchlist(
   propagateRemovals: boolean,
   filters?: SyncFilters,
   delivered: MediaRef[] = [],
+  since?: string | null,
 ): Promise<{ report: DataTypeReport; delivered: MediaRef[]; removed: MediaRef[] }> {
   const none = { delivered: [] as MediaRef[], removed: [] as MediaRef[] };
   if (!source.capabilities().watchlist || !source.pullWatchlist) {
@@ -377,7 +459,12 @@ async function runWatchlist(
   // Removals are only planned when the target can actually carry them out.
   const canRemove = propagateRemovals && Boolean(target.removeWatchlist);
 
-  const [srcAll, tgt] = await Promise.all([source.pullWatchlist(), target.pullWatchlist()]);
+  const [srcAll, tgt] = await Promise.all([source.pullWatchlist(since), target.pullWatchlist()]);
+  // A skipped read is "unchanged", not "empty" — planning removals from it would
+  // tear the whole target list down. Short-circuit before any planning.
+  if (source.lastWatchlistSkipped === true) {
+    return { report: emptyReport('watchlist', `${source.id} reported no watchlist changes since the last run`), ...none };
+  }
   const src = srcAll.filter((e) => includedByFilters(e.ref, filters));
   const plan = planWatchlistSync(src, tgt, { propagateRemovals: canRemove, alreadyDelivered: delivered });
   const report: DataTypeReport = {

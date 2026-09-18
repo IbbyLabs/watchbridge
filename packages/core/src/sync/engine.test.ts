@@ -3,6 +3,7 @@ import { runSync, MAX_REPORTED_ITEMS, type SyncTarget } from './engine.js';
 import { itemKey } from './identity.js';
 import {
   emptyPushResult,
+  type MediaRef,
   type ProgressEvent,
   type ProviderId,
   type PushResult,
@@ -585,4 +586,70 @@ describe('watchlist convergence against a target that auto-removes on watch', ()
     });
     expect(report.removedWatchlist?.map((r) => r.ids.tmdb)).toEqual([680]);
   });
-})
+});
+
+describe('history removal propagation (opt-in)', () => {
+  const movie = (tmdb: number): MediaRef => ({ kind: 'movie', ids: { tmdb } });
+  const base = (id: ProviderId) => ({
+    id,
+    capabilities: () => ({ history: true, progress: false, ratings: false, watchlist: false, datedHistory: true }),
+    pullHistory: async () => [],
+    pushHistory: async () => ({ ...emptyPushResult() }),
+    pullProgress: async () => [],
+    pushProgress: async () => ({ ...emptyPushResult() }),
+  });
+
+  it('removes titles from the target that the source deleted', async () => {
+    const removed: WatchEvent[] = [];
+    const source = {
+      ...base('simkl'),
+      lastRemovedActivity: 'R2',
+      pullLibraryIds: async () => [] as MediaRef[], // library is now empty
+    };
+    const target = {
+      ...base('trakt'),
+      removeHistory: async (events: WatchEvent[]) => {
+        removed.push(...events);
+        return { ...emptyPushResult(), added: events.length };
+      },
+    };
+
+    const report = await runSync(source, target, {
+      dataTypes: ['history'],
+      preview: false,
+      propagateHistoryRemovals: true,
+      removedSince: 'R1',
+      deliveredHistory: [movie(1), movie(2)],
+      now,
+    });
+
+    expect(removed.map((e) => e.ref.ids.tmdb)).toEqual([1, 2]);
+    expect(report.results[0]!.removed).toBe(2);
+    expect(report.removedHistory?.map((r) => r.ids.tmdb)).toEqual([1, 2]);
+  });
+
+  it('does nothing without the opt-in flag', async () => {
+    let called = false;
+    const source = {
+      ...base('simkl'),
+      lastRemovedActivity: 'R2',
+      pullLibraryIds: async () => [] as MediaRef[],
+    };
+    const target = {
+      ...base('trakt'),
+      removeHistory: async () => {
+        called = true;
+        return { ...emptyPushResult(), added: 0 };
+      },
+    };
+
+    await runSync(source, target, {
+      dataTypes: ['history'],
+      preview: false,
+      removedSince: 'R1',
+      deliveredHistory: [movie(1)],
+      now,
+    });
+    expect(called).toBe(false);
+  });
+});
