@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.0](https://github.com/IbbyLabs/watchbridge/compare/v1.1.0...v1.2.0) (2026-09-18)
+
+
+### Features
+
+* **http:** retry Simkl's write lock and add patch() ([1e1d769](https://github.com/IbbyLabs/watchbridge/commit/1e1d769aec6ab1ba00dcc05122a658cd08000c66))
+* **mdblist:** add a watchlist and ratings ([ee6f959](https://github.com/IbbyLabs/watchbridge/commit/ee6f9596bab96cd38b4929c71cb49ee99a0f7169))
+* **pmdb:** batch resume, fix paging, add date repair and a watchlist ([4c7a4a5](https://github.com/IbbyLabs/watchbridge/commit/4c7a4a5904cdafdecffbc1fe7ffb45e450248746))
+* **server:** store the history-removal setting and per-surface cursors ([5f27a07](https://github.com/IbbyLabs/watchbridge/commit/5f27a079869723e9afccba81e3076c9b1a878584))
+* **sync:** take a cursor per surface and propagate history removals ([974135e](https://github.com/IbbyLabs/watchbridge/commit/974135e11357966816567ba1341b81d8f8bc402a))
+* **trakt:** pull history incrementally and remove it ([ccb3baf](https://github.com/IbbyLabs/watchbridge/commit/ccb3bafa00679b0958985c5a5429a5307d4b6c66))
+
+
+### Bug Fixes
+
+* **simkl:** only read the surfaces that changed ([f755db8](https://github.com/IbbyLabs/watchbridge/commit/f755db8547347990faba07867187437837207545))
+
 ## [1.1.0](https://github.com/IbbyLabs/watchbridge/compare/v1.0.0...v1.1.0) (2026-09-18)
 
 
