@@ -88,7 +88,14 @@ export class AuthService {
       passwordHash: await hashPassword(input.password),
     });
 
-    await this.issueVerification(userId, email);
+    try {
+      await this.issueVerification(userId, email);
+    } catch (err) {
+      // The account and its token are already persisted, so a mail failure must
+      // not 500 the signup and leave a half-registered user. The login/register
+      // "Resend it" flow is the recovery path.
+      log.error({ userId, err }, 'Could not send the verification email during registration');
+    }
     log.info({ userId }, 'User registered');
     return { userId };
   }

@@ -58,6 +58,9 @@ const envSchema = z.object({
   // How often a scheduled sync ignores its delta cursor and re-reads everything,
   // so a cursor that has silently stopped advancing self-heals. 0 turns it off.
   FULL_RECONCILE_INTERVAL_HOURS: z.coerce.number().int().min(0).default(168),
+  // Daily cap on sync-alert emails so an outage can't blow the Resend daily
+  // quota in a burst. 0 disables the cap.
+  MAX_ALERT_EMAILS_PER_DAY: z.coerce.number().int().min(0).default(50),
 
   // Transactional email via Resend (https://resend.com). If the API key is
   // missing, emails are logged instead of sent so local dev works offline.

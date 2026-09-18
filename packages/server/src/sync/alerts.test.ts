@@ -115,3 +115,25 @@ describe('transition-based sync alerts', () => {
     expect(sent).toHaveLength(0);
   });
 });
+
+describe('daily alert budget', () => {
+  it('suppresses a second same-day alert once the budget is spent', async () => {
+    const limited = new SyncRunner(db, connections, 0, {
+      mailer,
+      appUrl: 'https://watchbridge.example',
+      maxEmailsPerDay: 1,
+    });
+
+    useBrokenConnection();
+    await limited.execute(await sync(), 'scheduled');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ kind: 'failure' });
+
+    // Recovery is a new transition that would normally email, but the daily
+    // budget is exhausted, so it is suppressed.
+    await db.orm.update(syncs).set({ lastRunStatus: 'error' });
+    useWorking();
+    await limited.execute(await sync(), 'scheduled');
+    expect(sent).toHaveLength(1);
+  });
+});

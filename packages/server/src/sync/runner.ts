@@ -82,6 +82,8 @@ function advanceCursor(
 /** Executes a sync configuration by wiring connected clients into the engine. */
 export class SyncRunner {
   private readonly deliveries: DeliveriesStore;
+  /** In-memory daily sync-alert budget (single-process, like the rate limiter). */
+  private readonly alertBudget = { day: '', sent: 0 };
 
   constructor(
     private readonly db: Db,
@@ -90,7 +92,7 @@ export class SyncRunner {
     private readonly reconcileIntervalHours = 168,
     /** Optional alerting. When set, a scheduled run emails the owner on the first
      *  failure and again on recovery — transitions only, never per-error. */
-    private readonly alerts?: { mailer: Mailer; appUrl: string },
+    private readonly alerts?: { mailer: Mailer; appUrl: string; maxEmailsPerDay?: number },
   ) {
     this.deliveries = new DeliveriesStore(db);
   }
@@ -291,6 +293,11 @@ export class SyncRunner {
     if (!owner?.email) return;
     const syncsUrl = `${this.alerts.appUrl}/syncs`;
 
+    if (!this.allowAlertEmail()) {
+      log.warn({ syncId: sync.id }, 'Sync alert suppressed — daily email budget exhausted');
+      return;
+    }
+
     try {
       if (isFailing) {
         await this.alerts.mailer.sendSyncFailureEmail(owner.email, {
@@ -304,6 +311,21 @@ export class SyncRunner {
     } catch (err) {
       log.error({ syncId: sync.id, err }, 'Could not send the sync alert email');
     }
+  }
+
+  /** True while the daily sync-alert email budget still has room. */
+  private allowAlertEmail(): boolean {
+    const max = this.alerts?.maxEmailsPerDay ?? 0;
+    if (max <= 0) return true; // unset/0 = no cap
+
+    const day = new Date().toISOString().slice(0, 10); // UTC calendar day
+    if (this.alertBudget.day !== day) {
+      this.alertBudget.day = day;
+      this.alertBudget.sent = 0;
+    }
+    if (this.alertBudget.sent >= max) return false;
+    this.alertBudget.sent += 1;
+    return true;
   }
 
   /** A short, credential-free reason from the outcome for the alert body. */

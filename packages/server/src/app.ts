@@ -66,6 +66,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const runner = new SyncRunner(db, connectionService, config.FULL_RECONCILE_INTERVAL_HOURS, {
     mailer,
     appUrl: config.APP_URL,
+    maxEmailsPerDay: config.MAX_ALERT_EMAILS_PER_DAY,
   });
   const scheduler = new SyncScheduler(db, runner, config);
 

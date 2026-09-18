@@ -6,8 +6,10 @@ import type { Mailer } from '../mail/mailer.js';
 import { buildApp } from '../app.js';
 
 const captured: { verifyUrl?: string; resetUrl?: string } = {};
+let failVerification = false;
 const mailer: Mailer = {
   async sendVerificationEmail(_to, url) {
+    if (failVerification) throw new Error('mail down');
     captured.verifyUrl = url;
   },
   async sendPasswordResetEmail(_to, url) {
@@ -167,6 +169,29 @@ describe('resending verification email', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(captured.verifyUrl).toBeUndefined();
+  });
+});
+
+describe('registration survives a mail failure', () => {
+  it('still creates the account when the verification email cannot be sent', async () => {
+    captured.verifyUrl = undefined;
+    failVerification = true;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: { email: 'carol@c.com', username: 'carol', password: 'correcthorse' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(captured.verifyUrl).toBeUndefined();
+    failVerification = false;
+
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { identifier: 'carol@c.com', password: 'correcthorse' },
+    });
+    expect(login.statusCode).toBe(403);
+    expect(login.json().error).toBe('email_unverified');
   });
 });
 
