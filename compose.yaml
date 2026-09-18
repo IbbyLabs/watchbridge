@@ -14,7 +14,8 @@ services:
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       SESSION_SECRET: ${SESSION_SECRET}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-cloudflare}
-      # Transactional email via Resend. Without a key, emails are logged only.
+      # Transactional email via Resend. Optional: without a key, every message
+      # (including the account-verification link) is logged instead of sent.
       RESEND_API_KEY: ${RESEND_API_KEY}
       MAIL_FROM: Watchbridge <no-reply@localhost>
     depends_on:

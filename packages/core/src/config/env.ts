@@ -62,8 +62,9 @@ const envSchema = z.object({
   // quota in a burst. 0 disables the cap.
   MAX_ALERT_EMAILS_PER_DAY: z.coerce.number().int().min(0).default(50),
 
-  // Transactional email via Resend (https://resend.com). If the API key is
-  // missing, emails are logged instead of sent so local dev works offline.
+  // Transactional email via Resend (https://resend.com). Optional: with no API
+  // key, emails are logged instead of sent, so a single-user instance runs
+  // without a mail provider (the verification link is read from the logs).
   RESEND_API_KEY: z.string().optional(),
   MAIL_FROM: z.string().default('Watchbridge <no-reply@localhost>'),
 
