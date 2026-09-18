@@ -121,7 +121,11 @@ describe('PmdbClient.pushProgress', () => {
 
     expect(res.added).toBe(1);
     expect(calls).toHaveLength(1);
-    expect(calls[0].body).toMatchObject({ tmdb_id: 550, media_type: 'movie', position_ms: 3_502_800 });
+    // Batched: the payload rides in `items` on the batch endpoint.
+    expect(calls[0].url).toContain('/api/external/resume/batch');
+    expect(calls[0].body).toMatchObject({
+      items: [expect.objectContaining({ tmdb_id: 550, media_type: 'movie', position_ms: 3_502_800 })],
+    });
   });
 
   it('does not send a position PublicMetaDB would turn into a finished play', async () => {
@@ -141,5 +145,196 @@ describe('PmdbClient.pushProgress', () => {
     expect(calls).toHaveLength(1);
     expect(res.added).toBe(1);
     expect(res.skipped).toBe(1);
+  });
+
+  it('chunks resume positions into batches of 50', async () => {
+    const calls = routeFetch(() => ({ body: { success: true } }));
+    const events = Array.from({ length: 120 }, (_, i) => ({
+      ref: { kind: 'movie' as const, ids: { tmdb: 1000 + i } },
+      progress: 10,
+      positionMs: 1_000,
+      runtimeMs: 10_000,
+    }));
+    const res = await new PmdbClient('pm-key').pushProgress(events);
+
+    expect(res.added).toBe(120);
+    const posts = calls.filter((c) => c.url.includes('/api/external/resume/batch'));
+    expect(posts).toHaveLength(3); // 50 + 50 + 20
+    expect((posts[0]!.body as { items: unknown[] }).items).toHaveLength(50);
+    expect((posts[2]!.body as { items: unknown[] }).items).toHaveLength(20);
+  });
+});
+
+describe('PmdbClient.removeHistory', () => {
+  it('bulk-deletes a title by tmdb_id and media_type', async () => {
+    const calls = routeFetch(() => ({ body: { success: true } }));
+    const res = await new PmdbClient('pm-key').removeHistory([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, watchedAt: null },
+    ]);
+
+    expect(res.added).toBe(1);
+    const del = calls.find((c) => c.method === 'DELETE')!;
+    expect(del.url).toContain('/api/external/watched?');
+    expect(del.url).toContain('tmdb_id=550');
+    expect(del.url).toContain('media_type=movie');
+    expect(del.url).not.toContain('season');
+  });
+
+  it('narrows to one episode when season and episode are given', async () => {
+    const calls = routeFetch(() => ({ body: { success: true } }));
+    await new PmdbClient('pm-key').removeHistory([
+      { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 2, number: 3 }, watchedAt: null },
+    ]);
+
+    const del = calls.find((c) => c.method === 'DELETE')!;
+    expect(del.url).toContain('media_type=tv');
+    expect(del.url).toContain('season=2');
+    expect(del.url).toContain('episode=3');
+  });
+});
+
+describe('PmdbClient pagination', () => {
+  it('keeps paging on `total` even when `totalPages` is absent', async () => {
+    const rows = (from: number, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ id: `${from + i}`, tmdb_id: 1000 + from + i, media_type: 'movie' as const }));
+    const calls = routeFetch((rec) => {
+      if (rec.url.includes('page=1')) return { body: { items: rows(0, 100), total: 150 } };
+      if (rec.url.includes('page=2')) return { body: { items: rows(100, 50), total: 150 } };
+      return { body: { items: [], total: 150 } };
+    });
+
+    const out = await new PmdbClient('pm-key').pullHistory();
+
+    expect(out).toHaveLength(150);
+    expect(calls.filter((c) => c.url.includes('/api/external/watched'))).toHaveLength(2);
+  });
+
+  it('stops after one page when the response is a bare array', async () => {
+    const calls = routeFetch(() => ({ body: [{ id: 'a', tmdb_id: 550, media_type: 'movie' }] }));
+    const out = await new PmdbClient('pm-key').pullHistory();
+
+    expect(out).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('PmdbClient watchlist', () => {
+  const lists = (items: unknown[]) => ({ body: { items, total: items.length } });
+
+  it('reads the watchlist list items as movies and shows', async () => {
+    routeFetch((rec) => {
+      if (rec.url.includes('/api/external/lists?')) return lists([{ id: 'lst_1', name: 'Watchlist', type: 'watchlist' }]);
+      if (rec.url.includes('/api/external/lists/lst_1/items')) {
+        return {
+          body: {
+            list: { id: 'lst_1' },
+            items: [
+              { id: 'li_1', tmdb_id: 550, media_type: 'movie' },
+              { id: 'li_2', tmdb_id: 1399, media_type: 'tv' },
+            ],
+            total: 2,
+          },
+        };
+      }
+      return { body: {} };
+    });
+
+    const out = await new PmdbClient('pm-key').pullWatchlist();
+
+    expect(out).toEqual([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } } },
+      { ref: { kind: 'show', ids: { tmdb: 1399 } } },
+    ]);
+  });
+
+  it('does not create a watchlist on a read', async () => {
+    const calls = routeFetch((rec) => (rec.url.includes('/api/external/lists') ? lists([]) : { body: {} }));
+    const out = await new PmdbClient('pm-key').pullWatchlist();
+
+    expect(out).toEqual([]);
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  it('creates the watchlist on first write, then adds items', async () => {
+    const calls = routeFetch((rec) => {
+      if (rec.method === 'POST' && rec.url.endsWith('/api/external/lists')) {
+        return { body: { success: true, item: { id: 'lst_new', type: 'watchlist' } } };
+      }
+      if (rec.url.includes('/api/external/lists')) return lists([]);
+      return { body: { success: true } };
+    });
+
+    const res = await new PmdbClient('pm-key').pushWatchlist([{ ref: { kind: 'movie', ids: { tmdb: 550 } } }]);
+
+    expect(res.added).toBe(1);
+    const create = calls.find((c) => c.method === 'POST' && c.url.endsWith('/api/external/lists'))!;
+    expect(create.body).toMatchObject({ type: 'watchlist' });
+    const add = calls.find((c) => c.url.includes('/api/external/lists/lst_new/items'))!;
+    expect(add.body).toEqual({ tmdb_id: 550, media_type: 'movie' });
+  });
+
+  it('adds to an existing watchlist without creating one', async () => {
+    const calls = routeFetch((rec) => {
+      if (rec.url.includes('/api/external/lists?')) return lists([{ id: 'lst_1', type: 'watchlist' }]);
+      return { body: { success: true } };
+    });
+
+    const res = await new PmdbClient('pm-key').pushWatchlist([{ ref: { kind: 'show', ids: { tmdb: 1399 } } }]);
+
+    expect(res.added).toBe(1);
+    expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/api/external/lists'))).toBe(false);
+    const add = calls.find((c) => c.url.includes('/items'))!;
+    expect(add.body).toEqual({ tmdb_id: 1399, media_type: 'tv' });
+  });
+
+  it('removes by matching the list item id', async () => {
+    const calls = routeFetch((rec) => {
+      if (rec.url.includes('/api/external/lists?')) return lists([{ id: 'lst_1', type: 'watchlist' }]);
+      if (rec.url.includes('/api/external/lists/lst_1/items?')) {
+        return { body: { items: [{ id: 'li_x', tmdb_id: 550, media_type: 'movie' }], total: 1 } };
+      }
+      return { body: { success: true } };
+    });
+
+    const res = await new PmdbClient('pm-key').removeWatchlist([{ ref: { kind: 'movie', ids: { tmdb: 550 } } }]);
+
+    expect(res.added).toBe(1);
+    const del = calls.find((c) => c.method === 'DELETE')!;
+    expect(del.url).toContain('/api/external/lists/lst_1/items/li_x');
+  });
+});
+
+describe('PmdbClient.updateWatchDate', () => {
+  it('patches the one matching play in place', async () => {
+    const calls = routeFetch((rec) => {
+      if (rec.url.includes('/api/external/watched?')) {
+        return { body: { items: [{ id: 'w1', tmdb_id: 550, media_type: 'movie' }], total: 1 } };
+      }
+      return { body: { success: true } };
+    });
+
+    const ok = await new PmdbClient('pm-key').updateWatchDate({ kind: 'movie', ids: { tmdb: 550 } }, '2021-02-03T00:00:00Z');
+
+    expect(ok).toBe(true);
+    const patch = calls.find((c) => c.method === 'PATCH')!;
+    expect(patch.url).toContain('/api/external/watched/w1');
+    expect(patch.body).toEqual({ watched_at: '2021-02-03T00:00:00Z' });
+  });
+
+  it('declines when more than one play matches (rewatches)', async () => {
+    const calls = routeFetch(() => ({
+      body: {
+        items: [
+          { id: 'w1', tmdb_id: 550, media_type: 'movie' },
+          { id: 'w2', tmdb_id: 550, media_type: 'movie' },
+        ],
+        total: 2,
+      },
+    }));
+
+    const ok = await new PmdbClient('pm-key').updateWatchDate({ kind: 'movie', ids: { tmdb: 550 } }, '2021-02-03T00:00:00Z');
+
+    expect(ok).toBe(false);
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
   });
 });
