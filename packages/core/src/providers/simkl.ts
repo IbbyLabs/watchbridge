@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { HttpClient, HttpError } from './http.js';
 import { createLogger } from '../logger.js';
 import { describeProviderError } from './errors.js';
@@ -77,18 +78,50 @@ interface SimklPlaybackItem {
 export interface SimklPin {
   userCode: string;
   verificationUrl: string;
+  /** V2 device flow only: the RFC 8628 URL with the code pre-filled (for a QR). */
+  verificationUriComplete?: string;
+  /** V2 device flow only: the secret the server polls with (never shown). */
+  deviceCode?: string;
   expiresIn: number;
   interval: number;
+}
+
+/** V2 tokens carry a refresh token + expiry; V1 carries only the access token. */
+export interface SimklTokens {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: number;
 }
 
 export interface SimklConfig {
   clientId: string;
   clientSecret?: string;
   accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  /** Which AUTH version this client speaks. Defaults to 'v1'. */
+  authVersion?: 'v1' | 'v2';
+  /** Persist refreshed tokens back to the store (V2 only). */
+  onRefresh?: (tokens: SimklTokens) => Promise<void>;
   appName?: string;
   appVersion?: string;
   /** Override the process-wide pacer. Mainly so tests are not serialized by it. */
   gate?: RateGate;
+}
+
+/** PKCE pair for the V2 authorization-code flow: S256 only. */
+export function generatePkcePair(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(32).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  return { verifier, challenge };
+}
+
+function parseErrorBody(raw: string): { error?: string } | undefined {
+  try {
+    return JSON.parse(raw) as { error?: string };
+  } catch {
+    return undefined;
+  }
 }
 
 const num = (v: unknown): number | undefined => {
@@ -110,6 +143,11 @@ const toIds = (b: SimklIdBlock): ExternalIds => ({
 export class SimklClient {
   readonly id = 'simkl' as const;
   private readonly http: HttpClient;
+  /** Separate client for the refresh call, so it never re-enters `http`'s
+   *  serialized chain (which would deadlock the request that triggered it). */
+  private readonly refreshHttp: HttpClient;
+  private readonly authVersion: 'v1' | 'v2';
+  private tokens?: SimklTokens;
 
   /** Latest `/sync/activities` "all" timestamp seen during a pull (delta cursor). */
   lastActivityAll?: string;
@@ -122,6 +160,10 @@ export class SimklClient {
   lastPullSkipped = false;
 
   constructor(private readonly cfg: SimklConfig) {
+    this.authVersion = cfg.authVersion ?? 'v1';
+    this.tokens = cfg.accessToken
+      ? { accessToken: cfg.accessToken, refreshToken: cfg.refreshToken, expiresAt: cfg.expiresAt }
+      : undefined;
     this.http = new HttpClient({
       baseUrl: SIMKL_BASE,
       // 10 GET/sec but 1 POST/sec per client_id and per user token; sustained
@@ -134,9 +176,22 @@ export class SimklClient {
       headers: {
         'simkl-api-key': cfg.clientId,
         'user-agent': `${cfg.appName ?? 'Watchbridge'}/${cfg.appVersion ?? '0.1.0'}`,
-        ...(cfg.accessToken ? { authorization: `Bearer ${cfg.accessToken}` } : {}),
       },
       // Simkl requires app-name/app-version on every request or it suspends the key.
+      defaultQuery: {
+        'app-name': cfg.appName ?? 'Watchbridge',
+        'app-version': cfg.appVersion ?? '0.1.0',
+      },
+      // The access token is injected per request so a V2 token can be refreshed
+      // in place without rebuilding the client.
+      beforeRequest: () => this.authedHeaders(),
+    });
+    // The refresh call must not go through `this.http` (it would re-enter the
+    // serialized chain mid-request and deadlock), so it gets its own client.
+    this.refreshHttp = new HttpClient({
+      baseUrl: SIMKL_BASE,
+      gate: cfg.gate ?? sharedRateGate('simkl'),
+      headers: { 'user-agent': `${cfg.appName ?? 'Watchbridge'}/${cfg.appVersion ?? '0.1.0'}` },
       defaultQuery: {
         'app-name': cfg.appName ?? 'Watchbridge',
         'app-version': cfg.appVersion ?? '0.1.0',
@@ -150,7 +205,19 @@ export class SimklClient {
 
   // ── Authorization-code (redirect) flow ───────────────────────────
 
-  authorizeUrl(redirectUri: string, state: string): string {
+  authorizeUrl(redirectUri: string, state: string, codeChallenge?: string): string {
+    if (this.authVersion === 'v2') {
+      const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: this.cfg.clientId,
+        redirect_uri: redirectUri,
+        state,
+        scope: 'media:read media:write',
+        code_challenge: codeChallenge ?? '',
+        code_challenge_method: 'S256',
+      });
+      return `https://simkl.com/oauth2/authorize?${params.toString()}`;
+    }
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: this.cfg.clientId,
@@ -160,8 +227,22 @@ export class SimklClient {
     return `https://simkl.com/oauth/authorize?${params.toString()}`;
   }
 
-  /** Exchange the redirect code for an access token. */
-  async exchangeCode(code: string, redirectUri: string): Promise<string> {
+  /** Exchange the redirect code for tokens. V2 also sends the PKCE verifier. */
+  async exchangeCode(code: string, redirectUri: string, codeVerifier?: string): Promise<SimklTokens> {
+    if (this.authVersion === 'v2') {
+      const r = await this.http.post<{ access_token: string; refresh_token: string; expires_in: number }>(
+        '/oauth2/token',
+        {
+          grant_type: 'authorization_code',
+          code,
+          client_id: this.cfg.clientId,
+          client_secret: this.cfg.clientSecret,
+          redirect_uri: redirectUri,
+          code_verifier: codeVerifier,
+        },
+      );
+      return this.storeTokens(r);
+    }
     const r = await this.http.post<{ access_token?: string }>('/oauth/token', {
       code,
       client_id: this.cfg.clientId,
@@ -170,12 +251,34 @@ export class SimklClient {
       grant_type: 'authorization_code',
     });
     if (!r.access_token) throw new Error('Simkl code exchange failed');
-    return r.access_token;
+    return { accessToken: r.access_token };
   }
 
-  // ── PIN auth flow ────────────────────────────────────────────────
+  // ── PIN / device auth flow ───────────────────────────────────────
 
-  async requestPin(): Promise<SimklPin & { userCode: string }> {
+  /** V1: GET /oauth/pin. V2: RFC 8628 device flow (POST /oauth2/device). */
+  async requestPin(): Promise<SimklPin> {
+    if (this.authVersion === 'v2') {
+      const r = await this.http.post<{
+        device_code: string;
+        user_code: string;
+        verification_uri: string;
+        verification_uri_complete?: string;
+        expires_in: number;
+        interval: number;
+      }>('/oauth2/device', {
+        client_id: this.cfg.clientId,
+        scope: 'media:read media:write',
+      });
+      return {
+        userCode: r.user_code,
+        deviceCode: r.device_code,
+        verificationUrl: r.verification_uri,
+        verificationUriComplete: r.verification_uri_complete,
+        expiresIn: r.expires_in,
+        interval: r.interval,
+      };
+    }
     const r = await this.http.get<{
       result: string;
       user_code: string;
@@ -192,13 +295,75 @@ export class SimklClient {
     };
   }
 
-  /** Poll once. Returns an access token when authorized, or 'pending'. */
+  /** V1 poll. Returns an access token when authorized, or 'pending'. */
   async pollPin(userCode: string): Promise<string | 'pending'> {
     const r = await this.http.get<{ result: string; access_token?: string; message?: string }>(
       `/oauth/pin/${userCode}?client_id=${this.cfg.clientId}`,
     );
     if (r.result === 'OK' && r.access_token) return r.access_token;
     return 'pending';
+  }
+
+  /** V2 device poll. Returns tokens when authorized, or a status string. */
+  async pollDevice(deviceCode: string): Promise<SimklTokens | 'pending' | 'slow_down' | 'expired' | 'denied'> {
+    try {
+      const r = await this.http.post<{ access_token: string; refresh_token: string; expires_in: number }>(
+        '/oauth2/token',
+        {
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+          client_id: this.cfg.clientId,
+          device_code: deviceCode,
+        },
+      );
+      return this.storeTokens(r);
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      switch (parseErrorBody(err.body)?.error) {
+        case 'authorization_pending': return 'pending';
+        case 'slow_down': return 'slow_down';
+        case 'expired_token': return 'expired';
+        case 'access_denied': return 'denied';
+        default: throw err;
+      }
+    }
+  }
+
+  // ── Token refresh (V2) ───────────────────────────────────────────
+
+  private storeTokens(r: { access_token: string; refresh_token?: string; expires_in: number }): SimklTokens {
+    const tokens: SimklTokens = {
+      accessToken: r.access_token,
+      ...(r.refresh_token ? { refreshToken: r.refresh_token } : {}),
+      expiresAt: Date.now() + r.expires_in * 1000,
+    };
+    this.tokens = tokens;
+    return tokens;
+  }
+
+  /** The current access token, refreshing a near-expiry V2 token first. */
+  private async ensureFresh(): Promise<string | undefined> {
+    const t = this.tokens;
+    if (!t) return undefined;
+    if (!t.refreshToken) return t.accessToken; // V1: long-lived, no refresh
+    if ((t.expiresAt ?? 0) - Date.now() > 60_000) return t.accessToken;
+
+    const r = await this.refreshHttp.post<{ access_token: string; refresh_token: string; expires_in: number }>(
+      '/oauth2/token',
+      {
+        grant_type: 'refresh_token',
+        client_id: this.cfg.clientId,
+        client_secret: this.cfg.clientSecret,
+        refresh_token: t.refreshToken,
+      },
+    );
+    const tokens = this.storeTokens(r);
+    await this.cfg.onRefresh?.(tokens);
+    return tokens.accessToken;
+  }
+
+  private async authedHeaders(): Promise<Record<string, string>> {
+    const token = await this.ensureFresh();
+    return token ? { authorization: `Bearer ${token}` } : {};
   }
 
   async validate(): Promise<boolean> {

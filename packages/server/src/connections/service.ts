@@ -6,9 +6,12 @@ import {
   SimklClient,
   TraktClient,
   createLogger,
+  generatePkcePair,
   type AppConfig,
   type DeviceCode,
   type ProviderId,
+  type SimklPin,
+  type SimklTokens,
   type SyncTarget,
 } from '@watchbridge/core';
 import type { ConnectionStore, PublicConnection } from './store.js';
@@ -35,20 +38,46 @@ type RedirectProvider = 'trakt' | 'simkl';
 class OAuthStateStore {
   private readonly map = new Map<
     string,
-    { userId: string; provider: RedirectProvider; expiresAt: number }
+    { userId: string; provider: RedirectProvider; codeVerifier?: string; expiresAt: number }
   >();
 
-  create(userId: string, provider: RedirectProvider): string {
+  create(userId: string, provider: RedirectProvider, codeVerifier?: string): string {
     const state = randomBytes(24).toString('base64url');
-    this.map.set(state, { userId, provider, expiresAt: Date.now() + 600_000 });
+    this.map.set(state, { userId, provider, codeVerifier, expiresAt: Date.now() + 600_000 });
     return state;
   }
 
-  consume(state: string): { userId: string; provider: RedirectProvider } | null {
+  consume(state: string): { userId: string; provider: RedirectProvider; codeVerifier?: string } | null {
     const entry = this.map.get(state);
     this.map.delete(state);
     if (!entry || entry.expiresAt < Date.now()) return null;
-    return { userId: entry.userId, provider: entry.provider };
+    return { userId: entry.userId, provider: entry.provider, codeVerifier: entry.codeVerifier };
+  }
+}
+
+/**
+ * V2 device flow: the user sees the short `user_code`, but the server polls with
+ * the secret `device_code`. This keeps the mapping server-side so the SPA stays
+ * version-agnostic and never sees the device code.
+ */
+class SimklDeviceStore {
+  private readonly map = new Map<string, { userId: string; deviceCode: string; expiresAt: number }>();
+
+  create(userId: string, userCode: string, deviceCode: string, expiresInSeconds: number): void {
+    this.map.set(userCode, { userId, deviceCode, expiresAt: Date.now() + expiresInSeconds * 1000 });
+  }
+
+  get(userCode: string): { userId: string; deviceCode: string } | null {
+    const e = this.map.get(userCode);
+    if (!e || e.expiresAt < Date.now()) {
+      this.map.delete(userCode);
+      return null;
+    }
+    return { userId: e.userId, deviceCode: e.deviceCode };
+  }
+
+  remove(userCode: string): void {
+    this.map.delete(userCode);
   }
 }
 
@@ -65,18 +94,33 @@ export class ConnectionService {
   ) {}
 
   private readonly states = new OAuthStateStore();
+  private readonly simklDevices = new SimklDeviceStore();
+
+  /** Which AUTH version NEW Simkl connections use (env switch). */
+  private simklVersion(): 'v1' | 'v2' {
+    return this.config.SIMKL_AUTH_VERSION;
+  }
+
+  /** Client credentials for a Simkl AUTH version. */
+  private simklCreds(version: 'v1' | 'v2'): { clientId: string; clientSecret?: string } {
+    if (version === 'v2') {
+      return { clientId: this.config.SIMKL_V2_CLIENT_ID!, clientSecret: this.config.SIMKL_V2_CLIENT_SECRET };
+    }
+    return { clientId: this.config.SIMKL_CLIENT_ID!, clientSecret: this.config.SIMKL_CLIENT_SECRET };
+  }
 
   isConfigured(provider: ProviderId): boolean {
     if (provider === 'trakt')
       return Boolean(this.config.TRAKT_CLIENT_ID && this.config.TRAKT_CLIENT_SECRET);
-    if (provider === 'simkl') return Boolean(this.config.SIMKL_CLIENT_ID);
+    if (provider === 'simkl') return Boolean(this.simklCreds(this.simklVersion()).clientId);
     return true; // pmdb and mdblist are per-user keys, always available
   }
 
   /** Whether the redirect (authorization-code) flow is available — needs a secret. */
   redirectConfigured(provider: RedirectProvider): boolean {
     if (provider === 'trakt') return this.isConfigured('trakt');
-    return Boolean(this.config.SIMKL_CLIENT_ID && this.config.SIMKL_CLIENT_SECRET);
+    const { clientId, clientSecret } = this.simklCreds(this.simklVersion());
+    return Boolean(clientId && clientSecret);
   }
 
   // ── Authorization-code (redirect) flow ───────────────────────────
@@ -88,11 +132,18 @@ export class ConnectionService {
   /** Build the provider authorize URL to send the user's browser to. */
   authorizeUrl(userId: string, provider: RedirectProvider): string {
     if (!this.redirectConfigured(provider)) throw new ProviderNotConfigured(provider);
-    const state = this.states.create(userId, provider);
     const uri = this.redirectUri(provider);
-    return provider === 'trakt'
-      ? this.newTrakt().authorizeUrl(uri, state)
-      : this.newSimkl().authorizeUrl(uri, state);
+    if (provider === 'trakt') {
+      const state = this.states.create(userId, provider);
+      return this.newTrakt().authorizeUrl(uri, state);
+    }
+    if (this.simklVersion() === 'v2') {
+      const { verifier, challenge } = generatePkcePair();
+      const state = this.states.create(userId, provider, verifier);
+      return this.newSimkl().authorizeUrl(uri, state, challenge);
+    }
+    const state = this.states.create(userId, provider);
+    return this.newSimkl().authorizeUrl(uri, state);
   }
 
   /** Handle the callback: validate state, exchange the code, store the connection. */
@@ -110,9 +161,9 @@ export class ConnectionService {
       const who = await this.whoIsTrakt(tokens);
       await this.store.upsert(currentUserId, 'trakt', who.label, { kind: 'trakt', ...tokens }, who.account);
     } else {
-      const accessToken = await this.newSimkl().exchangeCode(code, uri);
-      const who = await this.whoIsSimkl(accessToken);
-      await this.store.upsert(currentUserId, 'simkl', who.label, { kind: 'simkl', accessToken }, who.account);
+      const tokens = await this.newSimkl().exchangeCode(code, uri, entry.codeVerifier);
+      const who = await this.whoIsSimkl(tokens.accessToken);
+      await this.store.upsert(currentUserId, 'simkl', who.label, this.simklCredsFrom(tokens), who.account);
     }
     return entry.provider;
   }
@@ -144,13 +195,36 @@ export class ConnectionService {
     return 'connected';
   }
 
-  // ── Simkl PIN flow ───────────────────────────────────────────────
+  // ── Simkl PIN / device flow ──────────────────────────────────────
 
-  startSimklPin() {
-    return this.newSimkl().requestPin();
+  async startSimklPin(userId: string): Promise<SimklPin> {
+    const client = this.newSimkl();
+    const pin = await client.requestPin();
+    if (this.simklVersion() === 'v2' && pin.deviceCode) {
+      // Keep the secret device_code server-side; only expose what the SPA shows.
+      this.simklDevices.create(userId, pin.userCode, pin.deviceCode, pin.expiresIn);
+      const { deviceCode: _d, ...shown } = pin;
+      return shown;
+    }
+    return pin;
   }
 
   async pollSimklPin(userId: string, userCode: string): Promise<PollStatus> {
+    if (this.simklVersion() === 'v2') {
+      const dev = this.simklDevices.get(userCode);
+      if (!dev || dev.userId !== userId) return 'expired';
+      const client = this.newSimkl();
+      const res = await client.pollDevice(dev.deviceCode);
+      if (typeof res === 'string') {
+        if (res === 'expired' || res === 'denied') this.simklDevices.remove(userCode);
+        return res;
+      }
+      this.simklDevices.remove(userCode);
+      const who = await this.whoIsSimkl(res.accessToken);
+      await this.store.upsert(userId, 'simkl', who.label, this.simklCredsFrom(res), who.account);
+      return 'connected';
+    }
+
     const res = await this.newSimkl().pollPin(userCode);
     if (res === 'pending') return 'pending';
     const who = await this.whoIsSimkl(res);
@@ -199,7 +273,15 @@ export class ConnectionService {
   async simklFor(userId: string): Promise<SimklClient | null> {
     const c = await this.store.getCreds(userId, 'simkl');
     if (!c || c.creds.kind !== 'simkl') return null;
-    return this.watchCredentials(this.newSimkl(c.creds.accessToken), c.id, 'simkl');
+    const version: 'v1' | 'v2' = c.creds.refreshToken ? 'v2' : 'v1';
+    const client = this.newSimkl({
+      accessToken: c.creds.accessToken,
+      refreshToken: c.creds.refreshToken,
+      expiresAt: c.creds.expiresAt,
+      version,
+      onRefresh: (tokens) => this.store.updateCreds(c.id, { kind: 'simkl', ...tokens }),
+    });
+    return this.watchCredentials(client, c.id, 'simkl');
   }
 
   async pmdbFor(userId: string): Promise<PmdbClient | null> {
@@ -269,7 +351,7 @@ export class ConnectionService {
 
   private async whoIsSimkl(accessToken: string): Promise<{ label: string; account: string | null }> {
     try {
-      const settings = await this.newSimkl(accessToken).getSettings();
+      const settings = await this.newSimkl({ accessToken }).getSettings();
       return { label: settings.name ?? 'Simkl', account: settings.accountId ?? null };
     } catch (err) {
       log.warn({ provider: 'simkl', err }, 'Could not read the account behind this connection');
@@ -296,16 +378,37 @@ export class ConnectionService {
     });
   }
 
-  private newSimkl(accessToken?: string): SimklClient {
-    if (!this.isConfigured('simkl')) throw new ProviderNotConfigured('simkl');
+  private newSimkl(opts?: {
+    accessToken?: string;
+    refreshToken?: string;
+    expiresAt?: number;
+    version?: 'v1' | 'v2';
+    onRefresh?: (tokens: SimklTokens) => Promise<void>;
+  }): SimklClient {
+    const version = opts?.version ?? this.simklVersion();
+    const { clientId, clientSecret } = this.simklCreds(version);
+    if (!clientId) throw new ProviderNotConfigured('simkl');
     return new SimklClient({
-      clientId: this.config.SIMKL_CLIENT_ID!,
-      clientSecret: this.config.SIMKL_CLIENT_SECRET,
-      accessToken,
+      clientId,
+      clientSecret,
+      accessToken: opts?.accessToken,
+      refreshToken: opts?.refreshToken,
+      expiresAt: opts?.expiresAt,
+      authVersion: version,
+      onRefresh: opts?.onRefresh,
       // Sourced from config so a release/v tag bumps it (see APP_VERSION wiring).
       appName: this.config.APP_NAME,
       appVersion: this.config.APP_VERSION,
     });
+  }
+
+  /** Shape a Simkl token set for the credential blob. */
+  private simklCredsFrom(tokens: SimklTokens) {
+    return {
+      kind: 'simkl' as const,
+      accessToken: tokens.accessToken,
+      ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt } : {}),
+    };
   }
 }
 

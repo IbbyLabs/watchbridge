@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SimklClient } from './simkl.js';
+import { SimklClient, generatePkcePair, type SimklTokens } from './simkl.js';
 import { RateGate } from './rateGate.js';
 
 function routeFetch(handler: (url: string, method: string, body: unknown) => { status?: number; body?: unknown }) {
@@ -285,7 +286,85 @@ describe('SimklClient redirect flow', () => {
 
   it('exchanges a code for an access token', async () => {
     routeFetch((url) => (url.includes('/oauth/token') ? { body: { access_token: 'newtok' } } : { body: {} }));
-    await expect(new SimklClient(cfg).exchangeCode('code', 'https://app/cb')).resolves.toBe('newtok');
+    await expect(new SimklClient(cfg).exchangeCode('code', 'https://app/cb')).resolves.toEqual({ accessToken: 'newtok' });
+  });
+});
+
+describe('SimklClient AUTH V2', () => {
+  const v2 = { ...cfg, authVersion: 'v2' as const };
+
+  it('builds a V2 authorize URL with PKCE and scopes', () => {
+    const url = new SimklClient(v2).authorizeUrl('https://app/cb', 'st8', 'challenge123');
+    expect(url).toContain('https://simkl.com/oauth2/authorize');
+    expect(url).toContain('code_challenge=challenge123');
+    expect(url).toContain('code_challenge_method=S256');
+    expect(url).toContain('scope=media%3Aread+media%3Awrite');
+  });
+
+  it('derives a base64url S256 challenge from the verifier', () => {
+    const { verifier, challenge } = generatePkcePair();
+    expect(verifier).toHaveLength(43);
+    expect(challenge).toBe(createHash('sha256').update(verifier).digest('base64url'));
+  });
+
+  it('exchanges a code with the PKCE verifier and stores refresh tokens', async () => {
+    const calls = routeFetch((url) =>
+      url.includes('/oauth2/token')
+        ? { body: { access_token: 'simkl_at_x', refresh_token: 'simkl_rt_y', expires_in: 604800 } }
+        : { body: {} },
+    );
+    const tokens = await new SimklClient(v2).exchangeCode('code', 'https://app/cb', 'verifier123');
+    expect(tokens.accessToken).toBe('simkl_at_x');
+    expect(tokens.refreshToken).toBe('simkl_rt_y');
+    const post = calls.find((c) => c.method === 'POST' && c.url.includes('/oauth2/token'))!;
+    expect(post.body).toMatchObject({ grant_type: 'authorization_code', code_verifier: 'verifier123' });
+  });
+
+  it('starts the device flow via POST /oauth2/device', async () => {
+    const calls = routeFetch(() => ({
+      body: { device_code: 'dc', user_code: 'ABCD-EFGH', verification_uri: 'https://simkl.com/pin', expires_in: 900, interval: 5 },
+    }));
+    const pin = await new SimklClient(v2).requestPin();
+    expect(pin.userCode).toBe('ABCD-EFGH');
+    expect(pin.deviceCode).toBe('dc');
+    const post = calls.find((c) => c.url.includes('/oauth2/device'))!;
+    expect(post.body).toMatchObject({ scope: 'media:read media:write' });
+  });
+
+  it('polls the device flow and returns tokens when approved', async () => {
+    routeFetch(() => ({ body: { access_token: 'simkl_at_z', refresh_token: 'simkl_rt_z', expires_in: 604800 } }));
+    await expect(new SimklClient(v2).pollDevice('dc')).resolves.toMatchObject({
+      accessToken: 'simkl_at_z',
+      refreshToken: 'simkl_rt_z',
+    });
+  });
+
+  it('reports pending on authorization_pending', async () => {
+    routeFetch(() => ({ status: 400, body: { error: 'authorization_pending' } }));
+    await expect(new SimklClient(v2).pollDevice('dc')).resolves.toBe('pending');
+  });
+
+  it('refreshes an expired V2 token before a data call', async () => {
+    let saved: SimklTokens | undefined;
+    const calls = routeFetch((url) => {
+      if (url.includes('/oauth2/token')) {
+        return { body: { access_token: 'fresh', refresh_token: 'simkl_rt_y', expires_in: 604800 } };
+      }
+      if (url.includes('/sync/activities')) return { body: { all: 'T1' } };
+      return { body: {} };
+    });
+    const client = new SimklClient({
+      ...v2,
+      accessToken: 'stale',
+      refreshToken: 'simkl_rt_y',
+      expiresAt: Date.now() - 1000,
+      onRefresh: async (t) => {
+        saved = t;
+      },
+    });
+    await client.getActivities();
+    expect(saved?.accessToken).toBe('fresh');
+    expect(calls.some((c) => c.url.includes('/oauth2/token') && c.method === 'POST')).toBe(true);
   });
 });
 

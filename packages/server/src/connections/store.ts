@@ -17,6 +17,9 @@ export interface TraktCreds {
 export interface SimklCreds {
   kind: 'simkl';
   accessToken: string;
+  /** V2 only: presence means this connection uses AUTH V2 + refresh. */
+  refreshToken?: string;
+  expiresAt?: number;
 }
 export interface PmdbCreds {
   kind: 'pmdb';

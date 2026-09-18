@@ -72,6 +72,12 @@ const envSchema = z.object({
   TRAKT_CLIENT_SECRET: z.string().optional(),
   SIMKL_CLIENT_ID: z.string().optional(),
   SIMKL_CLIENT_SECRET: z.string().optional(),
+  // Simkl AUTH V2 (dual-run during the V1 -> V2 migration). SIMKL_AUTH_VERSION
+  // selects which version NEW connections use; existing connections keep the
+  // version they were created with and keep working until V1 retires.
+  SIMKL_AUTH_VERSION: z.enum(['v1', 'v2']).default('v1'),
+  SIMKL_V2_CLIENT_ID: z.string().optional(),
+  SIMKL_V2_CLIENT_SECRET: z.string().optional(),
   APP_NAME: z.string().default('Watchbridge'),
   APP_VERSION: z.string().default('0.0.0-dev'),
 });

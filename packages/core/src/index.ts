@@ -26,7 +26,13 @@ export {
   type TraktConfig,
   type DeviceCode,
 } from './providers/trakt.js';
-export { SimklClient, type SimklConfig, type SimklPin } from './providers/simkl.js';
+export {
+  SimklClient,
+  generatePkcePair,
+  type SimklConfig,
+  type SimklPin,
+  type SimklTokens,
+} from './providers/simkl.js';
 export { PmdbClient } from './providers/pmdb.js';
 export { MdblistClient } from './providers/mdblist.js';
 

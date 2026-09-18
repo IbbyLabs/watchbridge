@@ -51,16 +51,20 @@ export function connectionRoutes(
   // user-bound state, so it is CSRF-safe; ends in a redirect to the SPA.
   app.get('/api/connections/:provider/callback', async (request, reply) => {
     const provider = (request.params as { provider: string }).provider;
-    const { code, state, error } = request.query as {
+    const { code, state, error, iss } = request.query as {
       code?: string;
       state?: string;
       error?: string;
+      iss?: string;
     };
     const back = (suffix: string) => reply.redirect(`${config.APP_URL}/connections?${suffix}`);
     if (provider !== 'trakt' && provider !== 'simkl')
       return reply.code(404).send({ error: 'not_found' });
     if (!request.user) return reply.redirect(`${config.APP_URL}/login`);
     if (error || !code || !state) return back(`error=${provider}`);
+    // AUTH V2 returns iss; reject a Simkl code that did not come from Simkl
+    // (mix-up defence — see Simkl's OAuth 2.0 docs).
+    if (provider === 'simkl' && iss && iss !== 'https://simkl.com') return back(`error=${provider}`);
     try {
       const connected = await service.completeRedirect(state, code, request.user.id);
       return back(`connected=${connected}`);
@@ -88,9 +92,9 @@ export function connectionRoutes(
     }
   });
 
-  app.post('/api/connections/simkl/pin', auth, async (_request, reply) => {
+  app.post('/api/connections/simkl/pin', auth, async (request, reply) => {
     try {
-      return reply.send(await service.startSimklPin());
+      return reply.send(await service.startSimklPin(request.user!.id));
     } catch (err) {
       return providerError(reply, err);
     }

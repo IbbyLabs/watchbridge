@@ -29,6 +29,11 @@ export interface HttpOptions {
    * client paces alone, so concurrent syncs multiply the real request rate.
    */
   gate?: RateGate;
+  /**
+   * Async hook evaluated once per request to supply extra headers (e.g. a
+   * freshly-refreshed `Authorization` token). Defaults to a no-op.
+   */
+  beforeRequest?: () => Promise<Record<string, string>>;
 }
 
 /**
@@ -107,6 +112,7 @@ export class HttpClient {
       maxBackoffMs: 60_000,
       minBackoffMs: 1_000,
       timeoutMs: 20_000,
+      beforeRequest: async () => ({}),
       ...rest,
       // Writes default to the read interval when the caller does not set one.
       writeMinIntervalMs: options.writeMinIntervalMs ?? options.minIntervalMs ?? 0,
@@ -164,6 +170,7 @@ export class HttpClient {
       for (const [k, v] of defaults) if (!u.searchParams.has(k)) u.searchParams.set(k, v);
       url = u.toString();
     }
+    const extra = await this.opts.beforeRequest();
     let attempt = 0;
 
     for (;;) {
@@ -175,6 +182,7 @@ export class HttpClient {
           method,
           headers: {
             ...this.opts.headers,
+            ...extra,
             ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
             ...(init?.headers as Record<string, string> | undefined),
           },

@@ -56,7 +56,7 @@ list. Notable ones:
 | `TRUSTED_PROXIES`      | `cloudflare`, `loopback`, `private`, or explicit CIDRs — controls real-IP detection |
 | `REGISTRATION_ENABLED` | Toggle public sign-ups                                                              |
 | `RESEND_API_KEY` / `MAIL_FROM` | Outgoing mail (verification, password resets, alerts) via Resend              |
-| `TRAKT_*` / `SIMKL_*`  | Operator-registered OAuth app credentials                                           |
+| `TRAKT_*` / `SIMKL_*`  | Operator-registered OAuth app credentials; `SIMKL_AUTH_VERSION` + `SIMKL_V2_*` switch new Simkl connections to AUTH V2 |
 
 Behind Cloudflare, set `TRUSTED_PROXIES=cloudflare` so per-IP rate limits use the real visitor IP
 from `CF-Connecting-IP`, not the Cloudflare edge.
