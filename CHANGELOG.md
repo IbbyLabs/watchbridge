@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/IbbyLabs/watchbridge/compare/v1.0.0...v1.1.0) (2026-09-18)
+
+
+### Features
+
+* **simkl:** support AUTH V2 alongside V1 behind a version switch ([4f8310f](https://github.com/IbbyLabs/watchbridge/commit/4f8310fc8e7478ee3cca6b4905ba3af6bcb9407c))
+
+
+### Bug Fixes
+
+* **server:** cap sync-alert email volume and keep registration working when mail fails ([7458711](https://github.com/IbbyLabs/watchbridge/commit/74587118fe7253996456e64e60635c24fa056856))
+
 ## [1.0.0](https://github.com/IbbyLabs/watchbridge/compare/v0.11.0...v1.0.0) (2026-09-18)
 
 
