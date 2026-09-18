@@ -334,3 +334,146 @@ describe('MdblistClient.removeHistory', () => {
     });
   });
 })
+
+describe('MdblistClient per-surface gating', () => {
+  it('skips history when watched_at has not moved', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities') ? { body: { watched_at: '2026-01-01T00:00:00Z' } } : { body: {} },
+    );
+    const c = new MdblistClient('key');
+    const out = await c.pullHistory('2026-01-01T00:00:00Z');
+
+    expect(out).toEqual([]);
+    expect(c.lastPullSkipped).toBe(true);
+    expect(calls.filter((x) => x.url.includes('/sync/watched'))).toHaveLength(0);
+  });
+
+  it('reads history when watched_at moved and records the cursor', async () => {
+    routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities') ? { body: { watched_at: '2026-02-01T00:00:00Z' } } : { body: {} },
+    );
+    const c = new MdblistClient('key');
+    await c.pullHistory('2026-01-01T00:00:00Z');
+
+    expect(c.lastPullSkipped).toBe(false);
+    expect(c.lastActivityAll).toBe('2026-02-01T00:00:00Z');
+  });
+
+  it('skips playback when paused_at has not moved', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities') ? { body: { paused_at: '2026-03-01T00:00:00Z' } } : { body: [] },
+    );
+    const c = new MdblistClient('key');
+    const out = await c.pullProgress('2026-03-01T00:00:00Z');
+
+    expect(out).toEqual([]);
+    expect(c.lastProgressSkipped).toBe(true);
+    expect(calls.filter((x) => x.url.includes('/sync/playback'))).toHaveLength(0);
+  });
+});
+
+describe('MdblistClient watchlist', () => {
+  it('reads movies and shows with every id the item exposes', async () => {
+    routeFetch((rec) =>
+      rec.url.includes('/watchlist/items') ? {
+        body: {
+          movies: [{ ids: { imdb: 'tt0110413', tmdb: 550 } }],
+          shows: [{ imdb_id: 'tt0903747', tvdb_id: 1396 }],
+        },
+      } : { body: {} },
+    );
+
+    const out = await new MdblistClient('k').pullWatchlist();
+
+    expect(out).toEqual([
+      { ref: { kind: 'movie', ids: { imdb: 'tt0110413', tmdb: 550 } } },
+      { ref: { kind: 'show', ids: { imdb: 'tt0903747', tvdb: 1396 } } },
+    ]);
+  });
+
+  it('skips when watchlisted_at has not moved', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities') ? { body: { watchlisted_at: '2026-01-01T00:00:00Z' } } : { body: {} },
+    );
+    const c = new MdblistClient('k');
+    const out = await c.pullWatchlist('2026-01-01T00:00:00Z');
+
+    expect(out).toEqual([]);
+    expect(c.lastWatchlistSkipped).toBe(true);
+    expect(calls.filter((x) => x.url.includes('/watchlist/items'))).toHaveLength(0);
+  });
+
+  it('adds whole titles only', async () => {
+    const calls = routeFetch(() => ({ body: { added: 1, existing: 0, not_found: 1 } }));
+    const res = await new MdblistClient('k').pushWatchlist([
+      { ref: { kind: 'movie', ids: { imdb: 'tt0110413' } } },
+      { ref: { kind: 'show', ids: { tmdb: 1396 } } },
+    ]);
+
+    expect(res.added).toBe(1);
+    expect(res.notFound).toBe(1);
+    const post = calls.find((c) => c.method === 'POST')!;
+    expect(post.url).toContain('/watchlist/items/add');
+    expect(post.body).toEqual({
+      movies: [{ ids: { imdb: 'tt0110413' } }],
+      shows: [{ ids: { tmdb: 1396 } }],
+    });
+  });
+
+  it('removes whole titles via the remove route', async () => {
+    const calls = routeFetch(() => ({ body: { added: 1, existing: 0, not_found: 0 } }));
+    const res = await new MdblistClient('k').removeWatchlist([{ ref: { kind: 'movie', ids: { imdb: 'tt0110413' } } }]);
+
+    expect(res.added).toBe(1);
+    const post = calls.find((c) => c.method === 'POST')!;
+    expect(post.url).toContain('/watchlist/items/remove');
+  });
+});
+
+describe('MdblistClient ratings', () => {
+  it('reads movie and show ratings', async () => {
+    routeFetch((rec) =>
+      rec.url.includes('/sync/ratings') ? {
+        body: {
+          movies: [{ ids: { imdb: 'tt0110413', tmdb: 550 }, rating: 8, rated_at: '2026-01-01T00:00:00Z' }],
+          shows: [{ imdb_id: 'tt0903747', rating: 9 }],
+        },
+      } : { body: {} },
+    );
+
+    const out = await new MdblistClient('k').pullRatings();
+
+    expect(out).toEqual([
+      { ref: { kind: 'movie', ids: { imdb: 'tt0110413', tmdb: 550 } }, rating: 8, ratedAt: '2026-01-01T00:00:00Z' },
+      { ref: { kind: 'show', ids: { imdb: 'tt0903747' } }, rating: 9, ratedAt: null },
+    ]);
+  });
+
+  it('skips when rated_at has not moved', async () => {
+    const calls = routeFetch((rec) =>
+      rec.url.includes('/sync/last_activities') ? { body: { rated_at: '2026-01-01T00:00:00Z' } } : { body: {} },
+    );
+    const c = new MdblistClient('k');
+    const out = await c.pullRatings('2026-01-01T00:00:00Z');
+
+    expect(out).toEqual([]);
+    expect(c.lastRatingsSkipped).toBe(true);
+    expect(calls.filter((x) => x.url.includes('/sync/ratings'))).toHaveLength(0);
+  });
+
+  it('writes ratings and counts from the response', async () => {
+    const calls = routeFetch(() => ({ body: { updated: { movies: 1, shows: 1 }, not_found: {}, errors: [] } }));
+    const res = await new MdblistClient('k').pushRatings([
+      { ref: { kind: 'movie', ids: { tmdb: 550 } }, rating: 8, ratedAt: '2026-01-01T00:00:00Z' },
+      { ref: { kind: 'show', ids: { imdb: 'tt0903747' } }, rating: 9 },
+    ]);
+
+    expect(res.added).toBe(2);
+    const post = calls.find((c) => c.method === 'POST')!;
+    expect(post.url).toContain('/sync/ratings');
+    expect(post.body).toEqual({
+      movies: [{ ids: { tmdb: 550 }, rating: 8, rated_at: '2026-01-01T00:00:00Z' }],
+      shows: [{ ids: { imdb: 'tt0903747' }, rating: 9 }],
+    });
+  });
+});

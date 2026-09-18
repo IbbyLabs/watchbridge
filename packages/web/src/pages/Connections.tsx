@@ -14,7 +14,7 @@ const DESCRIPTIONS: Record<ProviderId, string> = {
   trakt: 'Watch history, ratings and progress.',
   simkl: 'History and lists (progress limited).',
   pmdb: 'History, resume points and lists.',
-  mdblist: 'History, resume points and watchlist.',
+  mdblist: 'History, resume points, ratings and watchlist.',
 };
 
 export function Connections() {
