@@ -606,4 +606,177 @@ describe('SimklClient.removeHistory', () => {
       shows: [{ ids: { tmdb: 1399 }, seasons: [{ number: 1, episodes: [{ number: 1 }] }] }],
     });
   });
-})
+});
+
+describe('SimklClient normalizes the "very long time ago" placeholder', () => {
+  it('turns a pre-2000 watch date into null, not a real date', async () => {
+    routeFetch((url) => {
+      if (url.includes('/sync/activities')) return { body: { all: 'T9' } };
+      if (url.includes('/sync/all-items/movies'))
+        return { body: { movies: [{ status: 'completed', last_watched_at: '1970-01-01T00:00:01Z', movie: { ids: { tmdb: 550 } } }] } };
+      return { body: {} };
+    });
+    const events = await new SimklClient(cfg).pullHistory();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.watchedAt).toBeNull();
+  });
+
+  it('keeps a real date', async () => {
+    routeFetch((url) => {
+      if (url.includes('/sync/activities')) return { body: { all: 'T9' } };
+      if (url.includes('/sync/all-items/movies'))
+        return { body: { movies: [{ status: 'completed', last_watched_at: '2021-05-05T00:00:00Z', movie: { ids: { tmdb: 550 } } }] } };
+      return { body: {} };
+    });
+    const events = await new SimklClient(cfg).pullHistory();
+    expect(events[0]!.watchedAt).toBe('2021-05-05T00:00:00Z');
+  });
+});
+
+describe('SimklClient history reads every movie status', () => {
+  it('includes a watched-then-dropped movie but not a plan-to-watch one', async () => {
+    routeFetch((url) => {
+      if (url.includes('/sync/activities')) return { body: { all: 'T9' } };
+      if (url.includes('/sync/all-items/movies'))
+        return {
+          body: {
+            movies: [
+              { status: 'dropped', last_watched_at: '2020-01-01T00:00:00Z', movie: { title: 'Dropped', ids: { tmdb: 1 } } },
+              { status: 'plantowatch', last_watched_at: null, movie: { title: 'Planned', ids: { tmdb: 2 } } },
+            ],
+          },
+        };
+      return { body: {} };
+    });
+    const events = await new SimklClient(cfg).pullHistory();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.ref.ids.tmdb).toBe(1);
+  });
+});
+
+describe('SimklClient anime uses TVDB coordinates', () => {
+  it('requests full_anime_seasons for anime and maps the tvdb episode', async () => {
+    const calls = routeFetch((url) => {
+      if (url.includes('/sync/activities')) return { body: { all: 'T9' } };
+      if (url.includes('/sync/all-items/anime'))
+        return {
+          body: {
+            anime: [
+              {
+                status: 'watching',
+                show: { title: 'AOT', ids: { tvdb: 267440 } },
+                seasons: [{ number: 1, episodes: [{ number: 4, watched_at: '2021-01-01T00:00:00Z', tvdb: { season: 2, episode: 4 } }] }],
+              },
+            ],
+          },
+        };
+      return { body: {} };
+    });
+    const events = await new SimklClient(cfg).pullHistory();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.ref).toMatchObject({ season: 2, number: 4 });
+    expect(calls.some((c) => c.url.includes('/sync/all-items/anime') && c.url.includes('extended=full_anime_seasons'))).toBe(true);
+  });
+
+  it('sends use_tvdb_anime_seasons on episode writes', async () => {
+    const calls = routeFetch(() => ({ body: {} }));
+    await new SimklClient(cfg).pushHistory([
+      { ref: { kind: 'episode', ids: { tmdb: 1399 }, season: 1, number: 1 }, watchedAt: null },
+    ]);
+    const post = calls.find((c) => c.url.includes('/sync/history') && c.method === 'POST')!;
+    expect((post.body as { shows: Array<{ use_tvdb_anime_seasons?: boolean }> }).shows[0]!.use_tvdb_anime_seasons).toBe(true);
+  });
+});
+
+describe('SimklClient AUTH V2 scope check', () => {
+  it('rejects a V2 token granted without write scope', async () => {
+    routeFetch(() => ({ body: { access_token: 'x', refresh_token: 'r', expires_in: 100, scope: 'media:read' } }));
+    await expect(new SimklClient({ ...cfg, authVersion: 'v2' }).exchangeCode('code', 'https://app/cb', 'v')).rejects.toThrow(/write/i);
+  });
+
+  it('accepts a write-scoped token', async () => {
+    routeFetch(() => ({ body: { access_token: 'x', refresh_token: 'r', expires_in: 100, scope: 'media:read media:write' } }));
+    await expect(new SimklClient({ ...cfg, authVersion: 'v2' }).exchangeCode('code', 'https://app/cb', 'v')).resolves.toMatchObject({ accessToken: 'x' });
+  });
+});
+
+describe('SimklClient settings', () => {
+  it('reads the account plan tier', async () => {
+    routeFetch(() => ({ body: { user: { name: 'n' }, account: { id: 1, type: 'vip' } } }));
+    await expect(new SimklClient(cfg).getSettings()).resolves.toMatchObject({ accountId: '1', accountType: 'vip' });
+  });
+});
+
+describe('SimklClient identification', () => {
+  it('sends client_id as a query parameter, not a header', async () => {
+    const calls = routeFetch((url) => (url.includes('/sync/activities') ? { body: { all: 'T1' } } : { body: {} }));
+    await new SimklClient(cfg).currentActivity();
+    expect(calls[0]!.url).toContain('client_id=scid');
+  });
+});
+
+describe('SimklClient per-surface gating', () => {
+  const activities = {
+    all: 'T2',
+    tv_shows: { playback: 'P2', rated_at: 'R2', plantowatch: 'W2', hold: 'W2' },
+    movies: { playback: 'P2', rated_at: 'R2', plantowatch: 'W2' },
+    anime: { playback: 'P2', rated_at: 'R2', plantowatch: 'W2', hold: 'W2' },
+  };
+
+  it('skips playback when the playback cursor is unchanged', async () => {
+    const calls = routeFetch((url) => (url.includes('/sync/activities') ? { body: activities } : { body: [] }));
+    const client = new SimklClient(cfg);
+    const out = await client.pullProgress('P2');
+    expect(out).toEqual([]);
+    expect(client.lastProgressSkipped).toBe(true);
+    expect(calls.filter((c) => c.url.includes('/sync/playback'))).toHaveLength(0);
+  });
+
+  it('skips watchlist when the watchlist cursor is unchanged', async () => {
+    const calls = routeFetch((url) => (url.includes('/sync/activities') ? { body: activities } : { body: {} }));
+    const client = new SimklClient(cfg);
+    const out = await client.pullWatchlist('W2');
+    expect(out).toEqual([]);
+    expect(client.lastWatchlistSkipped).toBe(true);
+    expect(calls.filter((c) => c.url.includes('/sync/all-items'))).toHaveLength(0);
+  });
+
+  it('skips ratings when the ratings cursor is unchanged', async () => {
+    const calls = routeFetch((url) => (url.includes('/sync/activities') ? { body: activities } : { body: {} }));
+    const client = new SimklClient(cfg);
+    const out = await client.pullRatings('R2');
+    expect(out).toEqual([]);
+    expect(client.lastRatingsSkipped).toBe(true);
+    expect(calls.filter((c) => c.url.includes('/sync/ratings'))).toHaveLength(0);
+  });
+});
+
+describe('SimklClient ratings read', () => {
+  it('uses GET /sync/ratings and passes date_from', async () => {
+    const calls = routeFetch(() => ({ body: { movies: [] } }));
+    await new SimklClient(cfg).pullRatings('R1');
+    const call = calls.find((c) => c.url.includes('/sync/ratings'))!;
+    expect(call.method).toBe('GET');
+    expect(call.url).toContain('date_from=R1');
+  });
+});
+
+describe('SimklClient.pullLibraryIds', () => {
+  it('returns title-level refs across movies, shows and anime', async () => {
+    routeFetch((url) =>
+      url.includes('/sync/all-items')
+        ? {
+            body: {
+              movies: [{ movie: { ids: { tmdb: 550, simkl: 100 } } }],
+              shows: [{ show: { ids: { tvdb: 121361 } } }],
+              anime: [{ show: { ids: { mal: 11061 } } }],
+            },
+          }
+        : { body: {} },
+    );
+    const ids = await new SimklClient(cfg).pullLibraryIds();
+    expect(ids).toContainEqual({ kind: 'movie', ids: { tmdb: 550, simkl: 100 } });
+    expect(ids).toContainEqual({ kind: 'show', ids: { tvdb: 121361 } });
+    expect(ids).toContainEqual({ kind: 'show', ids: { mal: 11061 } });
+  });
+});

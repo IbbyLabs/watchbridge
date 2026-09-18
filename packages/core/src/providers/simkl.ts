@@ -63,7 +63,10 @@ interface SimklShowItem {
   watched_episodes_count?: number;
   total_episodes_count?: number;
   show: { title?: string; year?: number; ids: SimklIdBlock };
-  seasons?: Array<{ number: number; episodes?: Array<{ number: number; watched_at?: string }> }>;
+  seasons?: Array<{
+    number: number;
+    episodes?: Array<{ number: number; watched_at?: string; tvdb?: { season: number; episode: number } }>;
+  }>;
 }
 
 interface SimklPlaybackItem {
@@ -72,7 +75,7 @@ interface SimklPlaybackItem {
   type: 'movie' | 'episode';
   movie?: { title?: string; year?: number; ids: SimklIdBlock };
   show?: { title?: string; year?: number; ids: SimklIdBlock };
-  episode?: { season: number; number: number };
+  episode?: { season: number; number: number; tvdb_season?: number; tvdb_number?: number };
 }
 
 export interface SimklPin {
@@ -91,6 +94,14 @@ export interface SimklTokens {
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number;
+}
+
+/** Shape of a V2 `/oauth2/token` success response (all three grants). */
+interface SimklTokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in: number;
+  scope?: string;
 }
 
 export interface SimklConfig {
@@ -140,17 +151,73 @@ const toIds = (b: SimklIdBlock): ExternalIds => ({
   ...(num(b.anidb) !== undefined ? { anidb: num(b.anidb) } : {}),
 });
 
+/**
+ * Simkl's "watched, date unknown" placeholder. Any watch timestamp before
+ * `2000-01-01` (the canonical `1970-01-01T00:00:01Z` and legacy near-epoch
+ * variants) means "Very long time ago" — it must not be treated as a real date
+ * and written into another tracker. Normalised to null (unknown).
+ */
+const normalizeWatchedAt = (value: string | undefined | null): string | null =>
+  typeof value === 'string' && value !== '' && value >= '2000-01-01' ? value : null;
+
+/** Activities fields that gate each sync surface (domain, field). */
+const WATCHLIST_KEYS: Array<[string, string]> = [
+  ['tv_shows', 'plantowatch'],
+  ['tv_shows', 'hold'],
+  ['anime', 'plantowatch'],
+  ['anime', 'hold'],
+  ['movies', 'plantowatch'],
+];
+const RATINGS_KEYS: Array<[string, string]> = [
+  ['tv_shows', 'rated_at'],
+  ['anime', 'rated_at'],
+  ['movies', 'rated_at'],
+];
+const PROGRESS_KEYS: Array<[string, string]> = [
+  ['tv_shows', 'playback'],
+  ['anime', 'playback'],
+  ['movies', 'playback'],
+];
+const REMOVED_KEYS: Array<[string, string]> = [
+  ['tv_shows', 'removed_from_list'],
+  ['anime', 'removed_from_list'],
+  ['movies', 'removed_from_list'],
+];
+
+/** The newest timestamp among a set of `(domain, field)` activities values. */
+const latestActivity = (a: Record<string, unknown>, picks: Array<[string, string]>): string | undefined => {
+  let best: string | undefined;
+  for (const [domain, field] of picks) {
+    const block = a[domain] as Record<string, unknown> | undefined;
+    const value = block?.[field];
+    if (typeof value === 'string' && (best === undefined || value > best)) best = value;
+  }
+  return best;
+};
+
 export class SimklClient {
   readonly id = 'simkl' as const;
   private readonly http: HttpClient;
   /** Separate client for the refresh call, so it never re-enters `http`'s
    *  serialized chain (which would deadlock the request that triggered it). */
   private readonly refreshHttp: HttpClient;
+  /**
+   * Client for the Cloudflare-cached catalog detail endpoints. Simkl asks that
+   * these carry no `Authorization` header — with one, the edge cache is skipped
+   * and the call starts counting against the quota instead of staying free.
+   */
+  private readonly catalogHttp: HttpClient;
   private readonly authVersion: 'v1' | 'v2';
   private tokens?: SimklTokens;
 
   /** Latest `/sync/activities` "all" timestamp seen during a pull (delta cursor). */
   lastActivityAll?: string;
+  /** Per-surface activities cursors, exposed to the runner for persistence. */
+  lastProgressActivity?: string;
+  lastRatingsActivity?: string;
+  lastWatchlistActivity?: string;
+  /** Latest `removed_from_list` timestamp — moving it means items were deleted. */
+  lastRemovedActivity?: string;
 
   /**
    * True when the last history pull was skipped because Simkl reported nothing
@@ -158,12 +225,27 @@ export class SimklClient {
    * so a cursor that has stopped moving would look like a healthy quiet sync.
    */
   lastPullSkipped = false;
+  /** Same per-surface skip flags, so an "unchanged" read is never read as empty. */
+  lastProgressSkipped = false;
+  lastRatingsSkipped = false;
+  lastWatchlistSkipped = false;
+
+  /** `/sync/activities`, fetched once per client and reused across surfaces. */
+  private activitiesCache?: Record<string, unknown>;
 
   constructor(private readonly cfg: SimklConfig) {
     this.authVersion = cfg.authVersion ?? 'v1';
     this.tokens = cfg.accessToken
       ? { accessToken: cfg.accessToken, refreshToken: cfg.refreshToken, expiresAt: cfg.expiresAt }
       : undefined;
+    const userAgent = `${cfg.appName ?? 'Watchbridge'}/${cfg.appVersion ?? '0.1.0'}`;
+    // client_id goes on the URL (Simkl's preferred form over the simkl-api-key
+    // header) and app-name/app-version are required on every request.
+    const defaultQuery = {
+      client_id: cfg.clientId,
+      'app-name': cfg.appName ?? 'Watchbridge',
+      'app-version': cfg.appVersion ?? '0.1.0',
+    };
     this.http = new HttpClient({
       baseUrl: SIMKL_BASE,
       // 10 GET/sec but 1 POST/sec per client_id and per user token; sustained
@@ -173,15 +255,8 @@ export class SimklClient {
       // Simkl suspends a client_id for sustained overage, and it counts every
       // request made with the key — so all Simkl clients share one pacer.
       gate: cfg.gate ?? sharedRateGate('simkl'),
-      headers: {
-        'simkl-api-key': cfg.clientId,
-        'user-agent': `${cfg.appName ?? 'Watchbridge'}/${cfg.appVersion ?? '0.1.0'}`,
-      },
-      // Simkl requires app-name/app-version on every request or it suspends the key.
-      defaultQuery: {
-        'app-name': cfg.appName ?? 'Watchbridge',
-        'app-version': cfg.appVersion ?? '0.1.0',
-      },
+      headers: { 'user-agent': userAgent },
+      defaultQuery,
       // The access token is injected per request so a V2 token can be refreshed
       // in place without rebuilding the client.
       beforeRequest: () => this.authedHeaders(),
@@ -191,11 +266,17 @@ export class SimklClient {
     this.refreshHttp = new HttpClient({
       baseUrl: SIMKL_BASE,
       gate: cfg.gate ?? sharedRateGate('simkl'),
-      headers: { 'user-agent': `${cfg.appName ?? 'Watchbridge'}/${cfg.appVersion ?? '0.1.0'}` },
-      defaultQuery: {
-        'app-name': cfg.appName ?? 'Watchbridge',
-        'app-version': cfg.appVersion ?? '0.1.0',
-      },
+      headers: { 'user-agent': userAgent },
+      defaultQuery,
+    });
+    // Catalog detail endpoints are Cloudflare-cached and must NOT carry an
+    // Authorization header (see Simkl docs). Shares the pacer, no auth hook.
+    this.catalogHttp = new HttpClient({
+      baseUrl: SIMKL_BASE,
+      minIntervalMs: 300,
+      gate: cfg.gate ?? sharedRateGate('simkl'),
+      headers: { 'user-agent': userAgent },
+      defaultQuery,
     });
   }
 
@@ -230,7 +311,7 @@ export class SimklClient {
   /** Exchange the redirect code for tokens. V2 also sends the PKCE verifier. */
   async exchangeCode(code: string, redirectUri: string, codeVerifier?: string): Promise<SimklTokens> {
     if (this.authVersion === 'v2') {
-      const r = await this.http.post<{ access_token: string; refresh_token: string; expires_in: number }>(
+      const r = await this.http.post<SimklTokenResponse>(
         '/oauth2/token',
         {
           grant_type: 'authorization_code',
@@ -307,7 +388,7 @@ export class SimklClient {
   /** V2 device poll. Returns tokens when authorized, or a status string. */
   async pollDevice(deviceCode: string): Promise<SimklTokens | 'pending' | 'slow_down' | 'expired' | 'denied'> {
     try {
-      const r = await this.http.post<{ access_token: string; refresh_token: string; expires_in: number }>(
+      const r = await this.http.post<SimklTokenResponse>(
         '/oauth2/token',
         {
           grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
@@ -330,7 +411,13 @@ export class SimklClient {
 
   // ── Token refresh (V2) ───────────────────────────────────────────
 
-  private storeTokens(r: { access_token: string; refresh_token?: string; expires_in: number }): SimklTokens {
+  private storeTokens(r: SimklTokenResponse): SimklTokens {
+    // The scopes page calls this the "one-line defence" against a silently
+    // read-only token: if the grant came back without write access, every later
+    // push 403s with `insufficient_scope` — fail the connect here instead.
+    if (this.authVersion === 'v2' && typeof r.scope === 'string' && !r.scope.includes('media:write')) {
+      throw new Error(`Simkl granted a token without write access (scope: ${r.scope})`);
+    }
     const tokens: SimklTokens = {
       accessToken: r.access_token,
       ...(r.refresh_token ? { refreshToken: r.refresh_token } : {}),
@@ -347,7 +434,7 @@ export class SimklClient {
     if (!t.refreshToken) return t.accessToken; // V1: long-lived, no refresh
     if ((t.expiresAt ?? 0) - Date.now() > 60_000) return t.accessToken;
 
-    const r = await this.refreshHttp.post<{ access_token: string; refresh_token: string; expires_in: number }>(
+    const r = await this.refreshHttp.post<SimklTokenResponse>(
       '/oauth2/token',
       {
         grant_type: 'refresh_token',
@@ -376,14 +463,18 @@ export class SimklClient {
     }
   }
 
-  /** Display name and the stable numeric account id behind this token. */
-  async getSettings(): Promise<{ name?: string; accountId?: string }> {
-    const r = await this.http.post<{ user?: { name?: string }; account?: { id?: number | string } }>(
+  /** Display name, the stable numeric account id, and plan tier behind this token. */
+  async getSettings(): Promise<{ name?: string; accountId?: string; accountType?: string }> {
+    const r = await this.http.post<{ user?: { name?: string }; account?: { id?: number | string; type?: string } }>(
       '/users/settings',
       {},
     );
     const id = r?.account?.id;
-    return { name: r?.user?.name, accountId: id === undefined || id === null ? undefined : String(id) };
+    return {
+      name: r?.user?.name,
+      accountId: id === undefined || id === null ? undefined : String(id),
+      accountType: r?.account?.type,
+    };
   }
 
   // ── Reads ────────────────────────────────────────────────────────
@@ -392,17 +483,34 @@ export class SimklClient {
     return this.http.get('/sync/activities');
   }
 
-  /** The `/sync/activities` "all" timestamp — used as the delta cursor. */
-  async currentActivity(): Promise<string | undefined> {
+  /**
+   * Read `/sync/activities` once per client and refresh every per-surface
+   * cursor from it. Subsequent surfaces in the same run reuse the snapshot, so
+   * gating history + watchlist + ratings + progress costs a single request.
+   */
+  private async activitiesSnapshot(): Promise<Record<string, unknown> | undefined> {
+    if (this.activitiesCache) return this.activitiesCache;
     try {
       const a = await this.getActivities();
-      return typeof a.all === 'string' ? a.all : undefined;
+      this.activitiesCache = a;
+      if (typeof a.all === 'string') this.lastActivityAll = a.all;
+      this.lastProgressActivity = latestActivity(a, PROGRESS_KEYS);
+      this.lastRatingsActivity = latestActivity(a, RATINGS_KEYS);
+      this.lastWatchlistActivity = latestActivity(a, WATCHLIST_KEYS);
+      this.lastRemovedActivity = latestActivity(a, REMOVED_KEYS);
+      return a;
     } catch (err) {
-      // Not fatal — the pull falls back to its saved cursor — but a cursor that
+      // Not fatal — each pull falls back to a full read — but a cursor that
       // stops advancing because this keeps failing should not be invisible.
-      log.warn({ err }, 'Could not read the Simkl activity cursor');
+      log.warn({ err }, 'Could not read the Simkl activities');
       return undefined;
     }
+  }
+
+  /** The `/sync/activities` "all" timestamp — used as the history delta cursor. */
+  async currentActivity(): Promise<string | undefined> {
+    const a = await this.activitiesSnapshot();
+    return typeof a?.all === 'string' ? a.all : undefined;
   }
 
   /**
@@ -426,13 +534,20 @@ export class SimklClient {
     // Read failures are left to propagate. Swallowing one into an empty list
     // makes a broken pull indistinguishable from an empty library, and the run
     // then reports success having read nothing.
+    //
+    // Movies are read across every status: a movie that was watched and later
+    // moved to `dropped` keeps its `last_watched_at` (history survives a status
+    // change), and `completed` alone would miss it. A movie counts as watched
+    // only when Simkl actually recorded a watch.
     const movies = await this.http.get<{ movies?: SimklMovieItem[] } | null>(
-      `/sync/all-items/movies/completed?extended=full${delta}`,
+      `/sync/all-items/movies?extended=full${delta}`,
     );
     for (const m of movies?.movies ?? []) {
+      const watched = m.status === 'completed' || m.last_watched_at != null;
+      if (!watched) continue;
       out.push({
         ref: { kind: 'movie', ids: toIds(m.movie.ids), title: m.movie.title, year: m.movie.year },
-        watchedAt: m.last_watched_at ?? null,
+        watchedAt: normalizeWatchedAt(m.last_watched_at),
       });
     }
 
@@ -443,9 +558,16 @@ export class SimklClient {
     // episodes are returned (e.g. 1 watched of 160 → just that one), so this never
     // marks an unwatched episode. The whole-show branch is a fallback for any show
     // Simkl still declines to enumerate.
+    //
+    // Anime is read with `full_anime_seasons` so each episode carries its TVDB
+    // `tvdb:{season,episode}` coordinate — Simkl numbers anime per AniDB (flat,
+    // per-cour), which does not match the TVDB/TMDB numbers the other trackers
+    // use. Without the mapping, a split-cour title lands on the wrong S/E.
     for (const type of ['shows', 'anime'] as const) {
+      const isAnime = type === 'anime';
+      const extended = isAnime ? 'full_anime_seasons' : 'full';
       const res = await this.http.get<Record<string, SimklShowItem[]> | null>(
-        `/sync/all-items/${type}?extended=full&include_all_episodes=yes&episode_watched_at=yes${delta}`,
+        `/sync/all-items/${type}?extended=${extended}&include_all_episodes=yes&episode_watched_at=yes${delta}`,
       );
       const items = res?.[type] ?? res?.shows ?? [];
       for (const s of items) {
@@ -454,25 +576,62 @@ export class SimklClient {
         if (enumerated) {
           for (const season of s.seasons ?? []) {
             for (const ep of season.episodes ?? []) {
+              const seasonNo = isAnime ? (ep.tvdb?.season ?? season.number) : season.number;
+              const episodeNo = isAnime ? (ep.tvdb?.episode ?? ep.number) : ep.number;
               out.push({
-                ref: { kind: 'episode', ids, season: season.number, number: ep.number, title: s.show.title },
-                watchedAt: ep.watched_at ?? null,
+                ref: { kind: 'episode', ids, season: seasonNo, number: episodeNo, title: s.show.title },
+                watchedAt: normalizeWatchedAt(ep.watched_at),
               });
             }
           }
         } else if (s.status === 'completed') {
           // Fully watched but not enumerated — mark the whole series.
-          out.push({ ref: { kind: 'show', ids, title: s.show.title }, watchedAt: s.last_watched_at ?? null });
+          out.push({
+            ref: { kind: 'show', ids, title: s.show.title },
+            watchedAt: normalizeWatchedAt(s.last_watched_at),
+          });
         }
       }
     }
     return out;
   }
 
+  /**
+   * Full current library as title-level refs (ids only). Used to reconcile
+   * deletions: anything delivered to the target that is no longer in this set
+   * was removed on Simkl. `/sync/all-items?extended=ids_only` returns movies,
+   * shows and anime (anime nests under `show`).
+   */
+  async pullLibraryIds(): Promise<MediaRef[]> {
+    const res = await this.http.get<{
+      movies?: SimklMovieItem[];
+      shows?: SimklShowItem[];
+      anime?: SimklShowItem[];
+    } | null>('/sync/all-items?extended=ids_only');
+    const out: MediaRef[] = [];
+    for (const m of res?.movies ?? []) out.push({ kind: 'movie', ids: toIds(m.movie.ids) });
+    for (const s of [...(res?.shows ?? []), ...(res?.anime ?? [])]) {
+      out.push({ kind: 'show', ids: toIds(s.show.ids) });
+    }
+    return out;
+  }
+
   /** Read resume positions from `/sync/playback` (a flat list of movies + episodes). */
-  async pullProgress(): Promise<ProgressEvent[]> {
+  async pullProgress(since?: string | null): Promise<ProgressEvent[]> {
+    await this.activitiesSnapshot();
+    this.lastProgressSkipped = false;
+    if (since && this.lastProgressActivity && since === this.lastProgressActivity) {
+      this.lastProgressSkipped = true;
+      return []; // unchanged — don't hit /sync/playback
+    }
     const items = await this.http.get<SimklPlaybackItem[] | null>('/sync/playback');
     const out: ProgressEvent[] = [];
+    // `progress` is a 0–100 percentage; Simkl's docs note it can come back
+    // rounded to an integer on read (the live reference shows fractional values,
+    // so it is not normalised here). The millisecond position is reconstructed
+    // from `progress` × runtime, which loses sub-percent precision — Simkl's
+    // `/sync/playback` response carries no `current_position`/`runtime` to do
+    // better, hence the per-item detail lookup below.
     for (const it of items ?? []) {
       if (it.type === 'movie' && it.movie) {
         const ids = toIds(it.movie.ids);
@@ -488,8 +647,16 @@ export class SimklClient {
       } else if (it.type === 'episode' && it.show && it.episode) {
         const ids = toIds(it.show.ids);
         const runtime = await this.runtimeMinutes('episode', ids);
+        // Prefer the TVDB coordinate: anime playback is numbered per AniDB, and
+        // the other trackers key off TVDB/TMDB seasons and episodes.
         out.push({
-          ref: { kind: 'episode', ids, season: it.episode.season, number: it.episode.number, title: it.show.title },
+          ref: {
+            kind: 'episode',
+            ids,
+            season: it.episode.tvdb_season ?? it.episode.season,
+            number: it.episode.tvdb_number ?? it.episode.number,
+            title: it.show.title,
+          },
           progress: it.progress,
           pausedAt: it.paused_at ?? null,
           ...positionFromRuntime(runtime, it.progress),
@@ -510,7 +677,8 @@ export class SimklClient {
     if (cached !== undefined || this.runtimeCache.has(key)) return cached;
     // For a TV/anime show the detail runtime is the typical episode length,
     // which is what an episode resume position needs.
-    const runtime = await this.http
+    // Catalog endpoint — must not carry an Authorization header (see catalogHttp).
+    const runtime = await this.catalogHttp
       .get<{ runtime?: number | null }>(`/${endpoint}/${ids.simkl}?extended=full`)
       .then((r) => (typeof r.runtime === 'number' && r.runtime > 0 ? r.runtime : undefined))
       .catch((err: unknown) => {
@@ -561,6 +729,13 @@ export class SimklClient {
 
   // ── Writes ───────────────────────────────────────────────────────
 
+  /**
+   * Write watch events. Rewatches are deliberately not recorded: Simkl treats a
+   * watch of an already-completed item as a no-op unless `?allow_rewatch=yes` is
+   * sent, and that flag must sit behind explicit user intent (a "Rewatch" button,
+   * gated on a Pro/VIP account) — a background sync never has that intent. See
+   * the Simkl Rewatches guide for the gating that would be required before use.
+   */
   async pushHistory(events: WatchEvent[]): Promise<PushResult> {
     const result = emptyPushResult();
     const movies: Array<Record<string, unknown>> = [];
@@ -611,6 +786,10 @@ export class SimklClient {
       ...wholeShows,
       ...[...showsByKey.values()].map((s) => ({
         ids: s.ids,
+        // Routes TVDB/TMDB season+episode coordinates to the right anime record
+        // (per-cour split titles, absolute-numbered shows). A safe no-op for
+        // non-anime shows, per Simkl's docs.
+        use_tvdb_anime_seasons: true,
         seasons: [...s.seasons.entries()].map(([number, eps]) => ({
           number,
           episodes: [...eps.entries()].map(([n, at]) => ({ number: n, watched_at: at })),
@@ -672,6 +851,7 @@ export class SimklClient {
 
     const shows = [...showsByKey.values()].map((s) => ({
       ids: s.ids,
+      use_tvdb_anime_seasons: true,
       seasons: [...s.seasons.entries()].map(([number, eps]) => ({
         number,
         episodes: [...eps].map((n) => ({ number: n })),
@@ -692,9 +872,18 @@ export class SimklClient {
     return result;
   }
 
-  async pullRatings(): Promise<RatingEvent[]> {
+  async pullRatings(since?: string | null): Promise<RatingEvent[]> {
     // Movies and shows/anime only; Simkl does not rate episodes or seasons.
-    const res = await this.http.post<SimklRatingsResponse>('/sync/ratings', {});
+    // The read side is `GET /sync/ratings` (a bare GET, not the write POST), and
+    // `date_from` turns it into an incremental pull.
+    await this.activitiesSnapshot();
+    this.lastRatingsSkipped = false;
+    if (since && this.lastRatingsActivity && since === this.lastRatingsActivity) {
+      this.lastRatingsSkipped = true;
+      return [];
+    }
+    const delta = since ? `?date_from=${encodeURIComponent(since)}` : '';
+    const res = await this.http.get<SimklRatingsResponse | null>(`/sync/ratings${delta}`);
     const out: RatingEvent[] = [];
     for (const m of res?.movies ?? []) {
       if (m.user_rating == null) continue;
@@ -754,7 +943,13 @@ export class SimklClient {
    * of as their watchlist. Each bucket is fetched on its own so the responses
    * stay small — an unscoped `all-items` read returns the entire library.
    */
-  async pullWatchlist(): Promise<WatchlistEvent[]> {
+  async pullWatchlist(since?: string | null): Promise<WatchlistEvent[]> {
+    await this.activitiesSnapshot();
+    this.lastWatchlistSkipped = false;
+    if (since && this.lastWatchlistActivity && since === this.lastWatchlistActivity) {
+      this.lastWatchlistSkipped = true;
+      return []; // unchanged — don't hit the watchlist buckets
+    }
     const out: WatchlistEvent[] = [];
     for (const status of WATCHLIST_STATUSES) {
       const movies = await this.http.get<{ movies?: SimklMovieItem[] } | null>(
