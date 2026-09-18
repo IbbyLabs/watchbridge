@@ -34,7 +34,10 @@ export function describeProviderError(provider: ProviderId, err: unknown): strin
     case 410:
       return `This ${name} account is deactivated. Sign in on ${name}'s own site to reactivate it, then connect again.`;
     case 412:
-      return `${name} rejected the request format. This is a bug in Watchbridge, not something you can fix.`;
+      // For Simkl this is the "client_id missing / wrong / suspended or still
+      // throttled" status (see api.simkl.org conventions/errors), not a format
+      // problem — retrying it unchanged will never help.
+      return `${name} rejected the request because the application key is missing, suspended, or temporarily throttled. Check the ${name} app key and slow down.`;
     case 420:
       return `This ${name} account has hit a limit on how much it can hold. Free up space on ${name}, or upgrade the account there.`;
     case 422:

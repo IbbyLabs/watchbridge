@@ -29,6 +29,27 @@ describe('HttpClient', () => {
     await expect(client.get('/y')).rejects.toMatchObject({ status: 404 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('retries once on a Simkl per-user write lock (400 rate_limit)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'rate_limit' }), { status: 400 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new HttpClient({ baseUrl: 'https://x', writeLockRetryMs: 1 });
+    await expect(client.post('/y', {})).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a different 400 body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'empty_field' }), { status: 400 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new HttpClient({ baseUrl: 'https://x', writeLockRetryMs: 1 });
+    await expect(client.post('/y', {})).rejects.toMatchObject({ status: 400 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('backoff never becomes an immediate retry', () => {

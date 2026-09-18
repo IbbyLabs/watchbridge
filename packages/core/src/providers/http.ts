@@ -30,6 +30,11 @@ export interface HttpOptions {
    */
   gate?: RateGate;
   /**
+   * Delay before retrying a Simkl per-user write lock (400 `rate_limit`). Kept
+   * short per the docs ("retry in a moment"); overridable for tests.
+   */
+  writeLockRetryMs?: number;
+  /**
    * Async hook evaluated once per request to supply extra headers (e.g. a
    * freshly-refreshed `Authorization` token). Defaults to a no-op.
    */
@@ -91,6 +96,21 @@ const isWrite = (method: string): boolean =>
   method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
 
 /**
+ * Simkl serialises writes per user with a 20-second lock. A second write that
+ * collides with the lock returns `400` with `{"error":"rate_limit"}` — not 429.
+ * This is the only 400 that is safe to retry unchanged.
+ */
+function isWriteLock(body: string): boolean {
+  if (!body) return false;
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown };
+    return typeof parsed.error === 'string' && parsed.error.toLowerCase() === 'rate_limit';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * A small fetch wrapper that paces requests, retries on 429/5xx honouring
  * `Retry-After`, and throws `HttpError` on non-2xx. One instance per provider
  * connection so pacing is isolated per upstream.
@@ -112,6 +132,7 @@ export class HttpClient {
       maxBackoffMs: 60_000,
       minBackoffMs: 1_000,
       timeoutMs: 20_000,
+      writeLockRetryMs: 3_000,
       beforeRequest: async () => ({}),
       ...rest,
       // Writes default to the read interval when the caller does not set one.
@@ -125,6 +146,10 @@ export class HttpClient {
 
   post<T>(path: string, body?: unknown, init?: RequestInit): Promise<T> {
     return this.request<T>('POST', path, body, init);
+  }
+
+  patch<T>(path: string, body?: unknown, init?: RequestInit): Promise<T> {
+    return this.request<T>('PATCH', path, body, init);
   }
 
   delete<T>(path: string, init?: RequestInit): Promise<T> {
@@ -196,7 +221,13 @@ export class HttpClient {
       if (res.status === 429 || res.status >= 500) {
         if (attempt < this.opts.maxRetries) {
           const wait = this.backoff(res, attempt);
-          log.warn({ url: redactUrl(url), status: res.status, attempt, wait }, 'Retrying after backoff');
+          // Trakt returns `X-Ratelimit` (bucket/window/remaining/until) with a 429;
+          // it is the only place the remaining quota is visible, so surface it.
+          const ratelimit = res.headers.get('x-ratelimit');
+          log.warn(
+            { url: redactUrl(url), status: res.status, attempt, wait, ...(ratelimit ? { ratelimit } : {}) },
+            'Retrying after backoff',
+          );
           await sleep(wait);
           attempt++;
           continue;
@@ -205,6 +236,16 @@ export class HttpClient {
 
       if (!res.ok) {
         const text = await res.text().catch(() => '');
+        // Simkl's per-user write lock surfaces as a 400 whose body is
+        // `{"error":"rate_limit"}`. The docs say serialise and retry once in a
+        // moment, not to back off — so this is a single short retry, first
+        // attempt only, and never turns into a hot loop.
+        if (res.status === 400 && attempt === 0 && isWriteLock(text)) {
+          log.warn({ url: redactUrl(url), attempt }, 'Retrying after a per-user write lock');
+          await sleep(this.opts.writeLockRetryMs);
+          attempt++;
+          continue;
+        }
         throw new HttpError(res.status, text, url);
       }
 
