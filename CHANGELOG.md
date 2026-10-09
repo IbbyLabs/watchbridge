@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.1](https://github.com/IbbyLabs/watchbridge/compare/v1.2.0...v1.2.1) (2026-10-09)
+
+
+### Features
+
+* **web:** load the header logo from favicon.svg ([05c2cd3](https://github.com/IbbyLabs/watchbridge/commit/05c2cd3028b1421715059bbb562e66c3445bfef4))
+
+
+### Miscellaneous Chores
+
+* release 1.2.1 ([a9d75e8](https://github.com/IbbyLabs/watchbridge/commit/a9d75e8b0664c28714e171fac452ebd0c06208b9))
+
 ## [1.2.0](https://github.com/IbbyLabs/watchbridge/compare/v1.1.0...v1.2.0) (2026-09-18)
 
 
