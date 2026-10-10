@@ -41,7 +41,9 @@ afterAll(async () => {
 describe('shutdown drain', () => {
   it('reads the drain window from WATCHBRIDGE_DRAIN_SECONDS, default 0', () => {
     expect(loadConfig(testEnv).WATCHBRIDGE_DRAIN_SECONDS).toBe(0);
-    expect(loadConfig({ ...testEnv, WATCHBRIDGE_DRAIN_SECONDS: '15' }).WATCHBRIDGE_DRAIN_SECONDS).toBe(15);
+    expect(
+      loadConfig({ ...testEnv, WATCHBRIDGE_DRAIN_SECONDS: '15' }).WATCHBRIDGE_DRAIN_SECONDS,
+    ).toBe(15);
   });
 
   it('flips /api/ready to 503 once draining begins while /api/health stays 200', async () => {

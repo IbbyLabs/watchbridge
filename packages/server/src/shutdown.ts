@@ -20,7 +20,10 @@ export function createShutdown(deps: ShutdownDeps): (signal: string) => Promise<
     if (started) return;
     started = true;
     deps.drain.draining = true;
-    log.info({ signal, drain_seconds: deps.drainSeconds }, 'Shutting down; reporting not ready first');
+    log.info(
+      { signal, drain_seconds: deps.drainSeconds },
+      'Shutting down; reporting not ready first',
+    );
     if (deps.drainSeconds > 0) {
       await new Promise((resolve) => setTimeout(resolve, deps.drainSeconds * 1000));
     }

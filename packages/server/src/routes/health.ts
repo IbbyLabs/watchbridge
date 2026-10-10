@@ -4,7 +4,12 @@ import type { AppConfig } from '@watchbridge/core';
 import type { Db } from '../db/client.js';
 import type { DrainState } from '../shutdown.js';
 
-export function healthRoutes(app: FastifyInstance, db: Db, config: AppConfig, drain: DrainState): void {
+export function healthRoutes(
+  app: FastifyInstance,
+  db: Db,
+  config: AppConfig,
+  drain: DrainState,
+): void {
   // Cheap, DB-free version read for the client (footer, etc.).
   app.get('/api/version', async (_req, reply) => {
     return reply.send({ name: config.APP_NAME, version: config.APP_VERSION });
