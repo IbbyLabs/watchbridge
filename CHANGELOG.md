@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/IbbyLabs/watchbridge/compare/v1.2.1...v1.3.0) (2026-10-10)
+
+
+### Features
+
+* **server:** drain readiness before closing on SIGTERM ([e3dce39](https://github.com/IbbyLabs/watchbridge/commit/e3dce3992efae37834a40488d6b578a7b929f9fc))
+
 ## [1.2.1](https://github.com/IbbyLabs/watchbridge/compare/v1.2.0...v1.2.1) (2026-10-09)
 
 
