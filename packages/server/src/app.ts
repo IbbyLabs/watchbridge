@@ -22,16 +22,19 @@ import { registerAuth } from './plugins/auth.js';
 import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { accountRoutes } from './routes/account.js';
+import type { DrainState } from './shutdown.js';
 import './types.js';
 
 export interface AppDeps {
   config: AppConfig;
   db: Db;
   mailer: Mailer;
+  drain?: DrainState;
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const { config, db, mailer } = deps;
+  const drain = deps.drain ?? { draining: false };
   const app = Fastify({
     logger: false,
     // We resolve the client IP ourselves (see registerRealIp) rather than using
@@ -71,7 +74,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const scheduler = new SyncScheduler(db, runner, config);
 
   const limiter = new RateLimiter();
-  healthRoutes(app, db, config);
+  healthRoutes(app, db, config, drain);
   authRoutes(app, auth, limiter, config);
   accountRoutes(app, db, auth, limiter, config);
   connectionRoutes(app, connectionService, connectionStore, config);

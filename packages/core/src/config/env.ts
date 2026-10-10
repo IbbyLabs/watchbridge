@@ -79,6 +79,8 @@ const envSchema = z.object({
   SIMKL_AUTH_VERSION: z.enum(['v1', 'v2']).default('v1'),
   SIMKL_V2_CLIENT_ID: z.string().optional(),
   SIMKL_V2_CLIENT_SECRET: z.string().optional(),
+  // Seconds /api/ready reports draining before the HTTP server closes on SIGTERM.
+  WATCHBRIDGE_DRAIN_SECONDS: z.coerce.number().int().min(0).default(0),
   APP_NAME: z.string().default('Watchbridge'),
   APP_VERSION: z.string().default('0.0.0-dev'),
 });

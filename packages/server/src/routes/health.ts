@@ -2,8 +2,9 @@ import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { AppConfig } from '@watchbridge/core';
 import type { Db } from '../db/client.js';
+import type { DrainState } from '../shutdown.js';
 
-export function healthRoutes(app: FastifyInstance, db: Db, config: AppConfig): void {
+export function healthRoutes(app: FastifyInstance, db: Db, config: AppConfig, drain: DrainState): void {
   // Cheap, DB-free version read for the client (footer, etc.).
   app.get('/api/version', async (_req, reply) => {
     return reply.send({ name: config.APP_NAME, version: config.APP_VERSION });
@@ -22,5 +23,11 @@ export function healthRoutes(app: FastifyInstance, db: Db, config: AppConfig): v
       version: config.APP_VERSION,
       db: dbOk,
     });
+  });
+
+  // Readiness only; /api/health stays 200 while draining for the container healthcheck.
+  app.get('/api/ready', async (_req, reply) => {
+    if (drain.draining) return reply.code(503).send({ status: 'draining' });
+    return reply.send({ status: 'ready' });
   });
 }
