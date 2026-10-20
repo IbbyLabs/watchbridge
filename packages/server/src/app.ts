@@ -15,6 +15,7 @@ import { connectionRoutes } from './routes/connections.js';
 import { repairRoutes } from './routes/repair.js';
 import { SyncRunner } from './sync/runner.js';
 import { SyncScheduler } from './sync/scheduler.js';
+import { PurgeJob } from './db/purge.js';
 import { syncRoutes } from './routes/syncs.js';
 import { RateLimiter } from './plugins/rateLimit.js';
 import { registerRealIp } from './plugins/realIp.js';
@@ -81,8 +82,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   syncRoutes(app, db, scheduler, config);
   repairRoutes(app, db, connectionService);
 
-  // The scheduler polls the DB on a timer; keep it off in tests.
-  if (config.NODE_ENV !== 'test') scheduler.start();
+  // The scheduler and purge poll the DB on a timer; keep them off in tests.
+  if (config.NODE_ENV !== 'test') {
+    scheduler.start();
+    new PurgeJob(db).start();
+  }
 
   registerSpa(app);
   return app;
