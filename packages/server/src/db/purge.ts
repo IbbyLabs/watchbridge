@@ -1,6 +1,8 @@
 import { isNotNull, lt, or } from 'drizzle-orm';
+import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { createLogger } from '@watchbridge/core';
 import type { Db } from './client.js';
+import type * as schema from './schema.js';
 import {
   emailChangeTokens,
   emailVerificationTokens,
@@ -27,22 +29,24 @@ export interface PurgeCounts {
 export async function purgeExpired(db: Db, now = new Date()): Promise<PurgeCounts> {
   const sessionCutoff = new Date(now.getTime() - SESSION_GRACE_MS);
   const runCutoff = new Date(now.getTime() - SYNC_RUN_RETENTION_MS);
+  // The Db union of drivers hides returning()'s column argument.
+  const orm = db.orm as PgDatabase<PgQueryResultHKT, typeof schema>;
 
-  const deadSessions = await db.orm
+  const deadSessions = await orm
     .delete(sessions)
     .where(lt(sessions.expiresAt, sessionCutoff))
-    .returning();
-  const oldRuns = await db.orm
+    .returning({ id: sessions.id });
+  const oldRuns = await orm
     .delete(syncRuns)
     .where(lt(syncRuns.startedAt, runCutoff))
-    .returning();
+    .returning({ id: syncRuns.id });
 
   let tokens = 0;
   for (const table of [emailVerificationTokens, passwordResetTokens, emailChangeTokens]) {
-    const gone = await db.orm
+    const gone = await orm
       .delete(table)
       .where(or(lt(table.expiresAt, now), isNotNull(table.consumedAt)))
-      .returning();
+      .returning({ id: table.id });
     tokens += gone.length;
   }
 
