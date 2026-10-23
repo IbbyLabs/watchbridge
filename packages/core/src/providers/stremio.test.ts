@@ -1,5 +1,6 @@
 import { deflateSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { HttpError } from './http.js';
 import {
   StremioClient,
   StremioLinkPending,
@@ -84,6 +85,26 @@ describe('decodeWatchedField', () => {
     } catch (err) {
       expect((err as WatchedBitfieldError).reason).toBe('anchor_not_found');
     }
+  });
+
+  it('rejects a field whose anchor exists in the list but whose bit is clear', () => {
+    const videos = ids(8);
+    // Bits 0 and 1 set, anchor claims video 5 is the last watched: built from another list.
+    const field = `${videos[4]}:5:${deflateSync(Buffer.from([0b011])).toString('base64')}`;
+    expect(() => decodeWatchedField(field, videos)).toThrow(/anchor_mismatch/);
+  });
+
+  it('treats an all-zero field as nothing watched, not as a mismatch', () => {
+    const videos = ids(8);
+    expect(
+      decodeWatchedField(
+        encode(
+          videos.map(() => false),
+          videos,
+        ),
+        videos,
+      ).size,
+    ).toBe(0);
   });
 
   it('rejects an empty video list, which stremio-core serialises with an undefined anchor', () => {
@@ -243,6 +264,118 @@ describe('StremioClient pairing', () => {
   });
 });
 
+describe('StremioClient delta pulls', () => {
+  const A = 'tt0000001';
+  const B = 'tt0000002';
+  const vids = (imdb: string) => [video(imdb, 1, 1, '2001-01-01T00:00:00.000Z')];
+  const library = () => [
+    series(A, vids(A), [0], '2026-05-01T00:00:00.000Z'),
+    series(B, vids(B), [0], '2026-06-01T00:00:00.000Z'),
+    item({
+      _id: 'tt9',
+      state: { timesWatched: 1, lastWatched: '2026-04-01T00:00:00.000Z' },
+    }),
+  ];
+  const cinemetaCalls = (calls: Calls) => calls.urls.filter((u) => u.includes('cinemeta'));
+
+  it('reads Cinemeta only for series played after the cursor', async () => {
+    const calls = stubStremio(library(), { [A]: vids(A), [B]: vids(B) });
+    const client = new StremioClient('k');
+    const events = await client.pullHistory('2026-05-15T00:00:00.000Z');
+    expect(cinemetaCalls(calls)).toEqual([
+      `GET https://v3-cinemeta.strem.io/meta/series/${B}.json`,
+    ]);
+    expect(events.map((e) => e.ref.ids.imdb)).toEqual([B]);
+    expect(client.lastActivityAll).toBe('2026-06-01T00:00:00.000Z');
+  });
+
+  it('picks up an old episode marked watched later, through _mtime', async () => {
+    const lib = [
+      series(A, vids(A), [0], '2026-05-01T00:00:00.000Z', { _mtime: '2026-06-20T00:00:00.000Z' }),
+      series(B, vids(B), [0], '2026-06-01T00:00:00.000Z', { _mtime: '2026-06-01T00:00:00.000Z' }),
+    ];
+    const calls = stubStremio(lib, { [A]: vids(A), [B]: vids(B) });
+    const client = new StremioClient('k');
+    const events = await client.pullHistory('2026-06-10T00:00:00.000Z');
+    expect(cinemetaCalls(calls)).toEqual([
+      `GET https://v3-cinemeta.strem.io/meta/series/${A}.json`,
+    ]);
+    expect(events.map((e) => e.ref.ids.imdb)).toEqual([A]);
+    expect(client.lastActivityAll).toBe('2026-06-20T00:00:00.000Z');
+  });
+
+  it('holds the cursor back by _mtime for a transiently skipped series', async () => {
+    const lib = [
+      series(A, vids(A), [0], '2026-05-01T00:00:00.000Z', { _mtime: '2026-06-20T00:00:00.000Z' }),
+    ];
+    stubStremio(lib, { [A]: 404 });
+    const client = new StremioClient('k');
+    await client.pullHistory('2026-06-10T00:00:00.000Z');
+    expect(client.lastActivityAll).toBe('2026-06-19T23:59:59.999Z');
+  });
+
+  it('reads everything on a full pull', async () => {
+    const calls = stubStremio(library(), { [A]: vids(A), [B]: vids(B) });
+    const client = new StremioClient('k');
+    const events = await client.pullHistory(null);
+    expect(cinemetaCalls(calls)).toHaveLength(2);
+    expect(events).toHaveLength(3);
+    expect(client.lastActivityAll).toBe('2026-06-01T00:00:00.000Z');
+  });
+
+  it('leaves the cursor alone when nothing is newer', async () => {
+    stubStremio(library(), { [A]: vids(A), [B]: vids(B) });
+    const client = new StremioClient('k');
+    expect(await client.pullHistory('2026-07-01T00:00:00.000Z')).toEqual([]);
+    expect(client.lastActivityAll).toBeUndefined();
+  });
+
+  it('holds the cursor back from a series skipped because Cinemeta failed', async () => {
+    const lib = [
+      ...library(),
+      series('tt0000003', vids('tt0000003'), [0], '2026-07-01T00:00:00.000Z'),
+    ];
+    stubStremio(lib, { [A]: 404, [B]: vids(B), tt0000003: vids('tt0000003') });
+    const client = new StremioClient('k');
+    const events = await client.pullHistory(null);
+    expect(events.map((e) => e.ref.ids.imdb).sort()).toEqual([B, 'tt0000003', 'tt9'].sort());
+    // One millisecond before A's play, so A is newer than the cursor next time.
+    expect(client.lastActivityAll).toBe('2026-04-30T23:59:59.999Z');
+  });
+
+  it('holds the cursor back from a series Cinemeta has no episodes for', async () => {
+    stubStremio(library(), { [A]: vids(A), [B]: [] });
+    const client = new StremioClient('k');
+    await client.pullHistory('2026-04-15T00:00:00.000Z');
+    expect(client.lastActivityAll).toBe('2026-05-31T23:59:59.999Z');
+  });
+
+  it('does not hold the cursor back for a series that can never decode', async () => {
+    const bad = item({
+      _id: B,
+      type: 'series',
+      state: { lastWatched: '2026-06-01T00:00:00.000Z', watched: 'garbage' },
+    });
+    stubStremio([bad], { [B]: vids(B) });
+    const client = new StremioClient('k');
+    await client.pullHistory(null);
+    expect(client.lastActivityAll).toBe('2026-06-01T00:00:00.000Z');
+  });
+});
+
+describe('StremioClient link code in errors', () => {
+  it('does not carry the link code in a failed poll URL', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json({}, 403)),
+    );
+    const err = await StremioClient.completeLink('SECRETCODE').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(String((err as HttpError).url)).not.toContain('SECRETCODE');
+    expect((err as HttpError).message).not.toContain('SECRETCODE');
+  });
+});
+
 describe('StremioClient session', () => {
   it('raises StremioSessionInvalid when Stremio rejects the key', async () => {
     vi.stubGlobal(
@@ -295,7 +428,11 @@ describe('StremioClient.pullHistory movies', () => {
     stubStremio([
       item({ _id: 'tt1' }),
       item({ _id: 'tt2', state: { timesWatched: 0, lastWatched: '2026-01-01T00:00:00.000Z' } }),
-      item({ _id: 'tt3', removed: true, state: { timesWatched: 1, lastWatched: '2026-02-01T00:00:00.000Z' } }),
+      item({
+        _id: 'tt3',
+        removed: true,
+        state: { timesWatched: 1, lastWatched: '2026-02-01T00:00:00.000Z' },
+      }),
       item({ _id: 'tt4', type: 'other' }),
       item({ _id: 'kitsu:1', type: 'movie' }),
       item({ _id: 'tt5', state: { timesWatched: 1 } }),

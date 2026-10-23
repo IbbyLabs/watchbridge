@@ -56,6 +56,7 @@ const SECRET_PARAMS = new Set([
   'client_secret',
   'password',
   'secret',
+  'code',
 ]);
 
 /** A URL safe to log or store: credential-bearing query values are replaced. */

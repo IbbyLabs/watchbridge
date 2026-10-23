@@ -44,6 +44,8 @@ interface LibraryItem {
   name?: string;
   type?: string;
   removed?: boolean;
+  /** Modification time; stremio-core bumps it on every change to the item. */
+  _mtime?: string | null;
   state?: LibraryItemState;
 }
 
@@ -59,6 +61,10 @@ interface CinemetaResponse {
   meta?: { videos?: CinemetaVideo[] };
 }
 
+type SkipReason = BitfieldFailure | 'no_watched_field' | 'cinemeta_unavailable' | 'no_videos';
+
+type VideosResult = { videos: CinemetaVideo[] } | { reason: 'no_videos' | 'cinemeta_unavailable' };
+
 export class StremioLinkPending extends Error {
   constructor() {
     super('Waiting for you to approve the code in Stremio');
@@ -73,7 +79,7 @@ export class StremioSessionInvalid extends Error {
   }
 }
 
-export type BitfieldFailure = 'malformed' | 'undecodable' | 'anchor_not_found';
+export type BitfieldFailure = 'malformed' | 'undecodable' | 'anchor_not_found' | 'anchor_mismatch';
 
 export class WatchedBitfieldError extends Error {
   constructor(readonly reason: BitfieldFailure) {
@@ -135,6 +141,12 @@ export function decodeWatchedField(serialized: string, videoIds: string[]): Set<
   }
 
   const bit = (j: number): boolean => (((values[j >> 3] ?? 0) >> (j & 7)) & 1) === 1;
+  if (!bit(anchorLength - 1)) {
+    // The anchor is the last watched video, so its bit must be set. An all-zero
+    // field is how an empty bitfield serialises (anchor on the first video).
+    if (values.some((b) => b !== 0)) throw new WatchedBitfieldError('anchor_mismatch');
+    return new Set();
+  }
   const offset = anchorLength - 1 - anchorIdx;
   const watched = new Set<number>();
   for (let i = 0; i < videoIds.length; i++) {
@@ -152,6 +164,10 @@ export function decodeWatchedField(serialized: string, videoIds: string[]): Set<
  */
 export class StremioClient {
   readonly id = 'stremio' as const;
+  /** Cursor for the next delta run; unset when this pull learned nothing newer. */
+  lastActivityAll?: string;
+  /** Requests the last history pull spent. */
+  lastPullRequests = 0;
   private readonly http: HttpClient;
   private readonly cinemeta: HttpClient;
 
@@ -245,22 +261,48 @@ export class StremioClient {
     return [];
   }
 
-  async pullHistory(_since?: string | null): Promise<WatchEvent[]> {
+  /**
+   * `since` is an ISO cursor: only items changed after it (`_mtime`, else
+   * `lastWatched`) are decoded, so a delta
+   * run reads Cinemeta for changed series alone. A full read passes null.
+   *
+   * The next cursor is exposed as `lastActivityAll`: the newest change time
+   * seen, held back to just before the oldest series skipped for a transient
+   * reason (Cinemeta unreachable or empty) so the next run retries it. It is
+   * derived from library data rather than the clock, so a device with a skewed
+   * clock cannot push it past unseen plays.
+   */
+  async pullHistory(since?: string | null): Promise<WatchEvent[]> {
+    this.lastActivityAll = undefined;
+    this.lastPullRequests = 1;
     const items = await this.library();
-    const metas = new Map<string, Promise<CinemetaVideo[] | null>>();
+    const sinceMs = toMs(since);
+    const metas = new Map<string, Promise<VideosResult>>();
     const out: WatchEvent[] = [];
+    const skipped: Record<SkipReason, number> = {
+      no_watched_field: 0,
+      malformed: 0,
+      undecodable: 0,
+      anchor_not_found: 0,
+      anchor_mismatch: 0,
+      cinemeta_unavailable: 0,
+      no_videos: 0,
+    };
     const tally = {
+      mode: sinceMs === null ? 'full' : 'delta',
       library: items.length,
       removed: 0,
       other: 0,
       nonImdb: 0,
+      unchanged: 0,
       movies: 0,
       moviesUndated: 0,
       series: 0,
-      seriesSkipped: 0,
       episodes: 0,
       episodesUndated: 0,
     };
+    let newest: number | null = null;
+    let oldestTransient: number | null = null;
 
     for (const item of items) {
       // Played without being saved is stored as removed, so removal is no sign of unwatching.
@@ -274,6 +316,12 @@ export class StremioClient {
         continue;
       }
       const lastWatched = toMs(item.state?.lastWatched);
+      const changedAt = toMs(item._mtime) ?? lastWatched;
+      if (sinceMs !== null && changedAt !== null && changedAt <= sinceMs) {
+        tally.unchanged++;
+        continue;
+      }
+      if (changedAt !== null) newest = Math.max(newest ?? changedAt, changedAt);
 
       if (item.type === 'movie') {
         if ((item.state?.timesWatched ?? 0) <= 0) continue;
@@ -290,25 +338,34 @@ export class StremioClient {
         continue;
       }
 
+      const skip = (reason: SkipReason, message: string): void => {
+        skipped[reason]++;
+        log.warn({ imdb: item._id, reason }, message);
+        if ((reason === 'cinemeta_unavailable' || reason === 'no_videos') && changedAt !== null) {
+          oldestTransient = Math.min(oldestTransient ?? changedAt, changedAt);
+        }
+      };
+
       const serialized = item.state?.watched;
       if (!serialized) {
         // Never played is normal for a saved series; played without episode data is not.
         if ((item.state?.timesWatched ?? 0) > 0 || lastWatched !== null) {
-          tally.seriesSkipped++;
-          log.warn(
-            { imdb: item._id, reason: 'no_watched_field' },
-            'Skipped a series without per-episode watch data',
-          );
+          skip('no_watched_field', 'Skipped a series without per-episode watch data');
         }
         continue;
       }
 
-      const videos = await this.videosFor(metas, item._id);
-      if (!videos) {
-        tally.seriesSkipped++;
+      const fetched = await this.videosFor(metas, item._id);
+      if ('reason' in fetched) {
+        skip(
+          fetched.reason,
+          fetched.reason === 'no_videos'
+            ? 'Skipped a series Cinemeta has no episodes for'
+            : 'Skipped a series because Cinemeta could not be read',
+        );
         continue;
       }
-      const ordered = orderVideos(videos);
+      const ordered = orderVideos(fetched.videos);
       let watched: Set<number>;
       try {
         watched = decodeWatchedField(
@@ -317,11 +374,7 @@ export class StremioClient {
         );
       } catch (err) {
         if (!(err instanceof WatchedBitfieldError)) throw err;
-        tally.seriesSkipped++;
-        log.warn(
-          { imdb: item._id, reason: err.reason },
-          'Skipped a series whose watched episodes could not be read',
-        );
+        skip(err.reason, 'Skipped a series whose watched episodes could not be read');
         continue;
       }
 
@@ -353,36 +406,41 @@ export class StremioClient {
       }
     }
 
-    log.info(tally, 'Stremio library read');
+    const cursor =
+      newest === null
+        ? null
+        : oldestTransient === null
+          ? newest
+          : Math.min(newest, oldestTransient - 1);
+    // Never move backwards: a held-back cursor still has to stay at or after `since`.
+    if (cursor !== null && (sinceMs === null || cursor > sinceMs)) {
+      this.lastActivityAll = new Date(cursor).toISOString();
+    }
+
+    log.info({ ...tally, skipped }, 'Stremio library read');
     return out;
   }
 
-  /** Cinemeta's video list for a series, cached for the pull. Null when it could not be had. */
+  /** Cinemeta's video list for a series, cached for the pull. */
   private videosFor(
-    cache: Map<string, Promise<CinemetaVideo[] | null>>,
+    cache: Map<string, Promise<VideosResult>>,
     imdb: string,
-  ): Promise<CinemetaVideo[] | null> {
+  ): Promise<VideosResult> {
     let pending = cache.get(imdb);
     if (!pending) {
+      this.lastPullRequests++;
       pending = this.cinemeta
         .get<CinemetaResponse>(`/meta/series/${imdb}.json`)
-        .then((res) => {
+        .then((res): VideosResult => {
           const videos = res?.meta?.videos;
-          if (!Array.isArray(videos) || videos.length === 0) {
-            log.warn(
-              { imdb, reason: 'no_videos' },
-              'Skipped a series Cinemeta has no episodes for',
-            );
-            return null;
-          }
-          return videos;
+          return Array.isArray(videos) && videos.length > 0 ? { videos } : { reason: 'no_videos' };
         })
-        .catch((err: unknown) => {
+        .catch((err: unknown): VideosResult => {
           log.warn(
             { imdb, status: err instanceof HttpError ? err.status : undefined, err },
-            'Skipped a series because Cinemeta could not be read',
+            'Cinemeta request failed',
           );
-          return null;
+          return { reason: 'cinemeta_unavailable' };
         });
       cache.set(imdb, pending);
     }

@@ -21,6 +21,24 @@ const report = (failed: Partial<Record<'history' | 'progress' | 'ratings' | 'wat
     })),
   }) as SyncReport;
 
+describe('advanceCursors for a Stremio source', () => {
+  it('stores the history cursor only when the history delivery had no failures', () => {
+    const ok: Record<string, string> = { 'stremio:history': 'old' };
+    advanceCursors(ok, 'stremio', { lastActivityAll: '2026-06-01T00:00:00.000Z' }, report());
+    expect(ok).toEqual({ 'stremio:history': '2026-06-01T00:00:00.000Z' });
+
+    const failed: Record<string, string> = { 'stremio:history': 'old' };
+    advanceCursors(failed, 'stremio', { lastActivityAll: '2026-06-01T00:00:00.000Z' }, report({ history: 1 }));
+    expect(failed).toEqual({ 'stremio:history': 'old' });
+  });
+
+  it('keeps the old cursor when the pull learned nothing newer', () => {
+    const cursors: Record<string, string> = { 'stremio:history': 'old' };
+    advanceCursors(cursors, 'stremio', {}, report());
+    expect(cursors).toEqual({ 'stremio:history': 'old' });
+  });
+});
+
 describe('advanceCursors', () => {
   it('advances every surface when nothing failed', () => {
     const cursors: Record<string, string> = {};
