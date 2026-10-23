@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.4.0](https://github.com/IbbyLabs/watchbridge/compare/v1.3.0...v1.4.0) (2026-10-23)
+
+
+### Features
+
+* **server:** purge sessions, sync runs and tokens past retention ([cda4438](https://github.com/IbbyLabs/watchbridge/commit/cda4438a49e46b367410d9a15239b3c36546b967))
+* **sync:** Stremio watch history as a read-only source (FR-235) ([0936108](https://github.com/IbbyLabs/watchbridge/commit/0936108a8437fb1f5dfd92c1e918ea1ec8b8e900))
+
+
+### Bug Fixes
+
+* **stremio:** accept the bitfield encoding anchored on the last video ([e564df3](https://github.com/IbbyLabs/watchbridge/commit/e564df389f34a942b79086e55080356acad2e3a2))
+* **stremio:** delta pulls, anchor check and redacted link code ([9382905](https://github.com/IbbyLabs/watchbridge/commit/9382905ff89c816c43d67e914529406dacb62e6a))
+
+
+### Performance Improvements
+
+* **server:** return only ids from retention purge deletes ([66bdc6e](https://github.com/IbbyLabs/watchbridge/commit/66bdc6ea26b0a9cbf19b5855047b0da241b5e655))
+
 ## [1.3.0](https://github.com/IbbyLabs/watchbridge/compare/v1.2.1...v1.3.0) (2026-10-10)
 
 
