@@ -3,7 +3,8 @@
 Sync watch history and playback progress between [Trakt](https://trakt.tv),
 [Simkl](https://simkl.com), [PublicMetaDB](https://publicmetadb.com) and
 [MDBList](https://mdblist.com) — on a schedule or on demand. Connect your accounts, pick what to
-sync and in which direction, and Watchbridge keeps them in step.
+sync and in which direction, and Watchbridge keeps them in step. [Stremio](https://www.stremio.com)
+watch history can be synced out to any of them; Stremio is read from, never written to.
 
 Built to be correct first: it matches titles by ID (never by name), never re-adds a play it has
 already synced, and never marks something watched unless the source actually says so.

@@ -12,6 +12,7 @@ const root = pino({
       '*.access_token',
       '*.refresh_token',
       '*.apiKey',
+      '*.authKey',
       '*.password',
     ],
     censor: '[redacted]',

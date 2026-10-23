@@ -2,14 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import type { AppConfig } from '@watchbridge/core';
+import { isSourceOnly, type AppConfig, type ProviderId } from '@watchbridge/core';
 import { requireAuth } from '../plugins/auth.js';
 import type { Db } from '../db/client.js';
 import { syncs, syncRuns, type Sync } from '../db/schema.js';
 import { parseDataTypes } from '../sync/runner.js';
 import type { SyncScheduler } from '../sync/scheduler.js';
 
-const provider = z.enum(['trakt', 'simkl', 'pmdb', 'mdblist']);
+const provider = z.enum(['trakt', 'simkl', 'pmdb', 'mdblist', 'stremio']);
 const dataType = z.enum(['history', 'progress', 'ratings', 'watchlist']);
 
 const externalIds = z
@@ -51,6 +51,18 @@ const createBody = z
   .refine((v) => v.source !== v.target, {
     message: 'source and target must differ',
     path: ['target'],
+  })
+  .refine((v) => !isSourceOnly(v.target), {
+    message: 'this provider can only be a source, never a target',
+    path: ['target'],
+  })
+  .refine((v) => !isSourceOnly(v.source) || v.direction === 'one_way', {
+    message: 'a source-only provider cannot take part in a two-way sync',
+    path: ['direction'],
+  })
+  .refine((v) => !isSourceOnly(v.source) || v.dataTypes.every((d) => d === 'history'), {
+    message: 'this provider only supplies watch history',
+    path: ['dataTypes'],
   })
   .refine((v) => !v.dataTypes.includes('ratings') || v.ratingsAuthority === v.source || v.ratingsAuthority === v.target, {
     message: 'ratings syncs need a ratings authority of the source or target',
@@ -221,6 +233,20 @@ export function syncRoutes(
         ? d.propagateHistoryRemovals
         : existing.propagateHistoryRemovals;
     const nextDirection = d.direction ?? existing.direction;
+    if (isSourceOnly(existing.source as ProviderId)) {
+      if (nextDirection === 'two_way') {
+        return reply.code(400).send({
+          error: 'invalid_input',
+          message: 'a source-only provider cannot take part in a two-way sync',
+        });
+      }
+      if (nextDataTypes.some((t) => t !== 'history')) {
+        return reply.code(400).send({
+          error: 'invalid_input',
+          message: 'this provider only supplies watch history',
+        });
+      }
+    }
     if (nextRemovals === true && nextDirection === 'two_way') {
       return reply.code(400).send({
         error: 'invalid_input',

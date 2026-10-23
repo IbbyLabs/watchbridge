@@ -22,7 +22,9 @@ United Kingdom. Contact: **team@ibbylabs.dev**.
 **Because you connected a service**
 
 - Access and refresh tokens, or API keys, for the accounts you connect (Trakt,
-  Simkl, PublicMetaDB, MDBList). These are encrypted before storage.
+  Simkl, PublicMetaDB, MDBList, Stremio). These are encrypted before storage.
+  For Stremio this is a session key issued through Stremio's link flow; your
+  Stremio email and password are never requested or stored.
 - The watch history, playback progress, ratings and watchlist entries those
   services expose. This is the data that is synced between them.
 
@@ -65,6 +67,11 @@ handle it on our behalf, only to run Watchbridge:
 
 Watch data is also sent to the providers you connect, as the direction of each
 sync you set up requires. Their own privacy policies apply to what they hold.
+
+If you connect Stremio, Watchbridge contacts `api.strem.io` and
+`link.stremio.com` to link your account and read your library, and
+`v3-cinemeta.strem.io` to look up the episode list of series you have watched
+(only the series' public IMDb id is sent). Stremio is only ever read from.
 
 ## Transfers outside the UK
 

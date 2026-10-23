@@ -1,4 +1,7 @@
-export type ProviderId = 'trakt' | 'simkl' | 'pmdb' | 'mdblist';
+export type ProviderId = 'trakt' | 'simkl' | 'pmdb' | 'mdblist' | 'stremio';
+
+/** Providers that can be read from but never written to. */
+export const SOURCE_ONLY: readonly ProviderId[] = ['stremio'];
 export type DataType = 'history' | 'progress' | 'ratings' | 'watchlist';
 
 export interface User {
@@ -23,6 +26,8 @@ export interface ProviderStatus {
   configured: boolean;
   /** Whether the one-click browser redirect flow is available. */
   redirect: boolean;
+  /** Can be a sync source but never a target. */
+  sourceOnly?: boolean;
 }
 
 export interface ExternalIds {
@@ -115,4 +120,5 @@ export const PROVIDER_LABEL: Record<ProviderId, string> = {
   simkl: 'Simkl',
   pmdb: 'PublicMetaDB',
   mdblist: 'MDBList',
+  stremio: 'Stremio',
 };

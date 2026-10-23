@@ -3,6 +3,7 @@ import { WatchDatesNotice } from '../components/WatchDatesNotice.tsx';
 import { api } from '../lib/api.ts';
 import {
   PROVIDER_LABEL,
+  SOURCE_ONLY,
   type Connection,
   type DataType,
   type DataTypeReport,
@@ -32,7 +33,8 @@ import {
   IconTrash,
 } from '../components/icons.tsx';
 
-const PROVIDERS: ProviderId[] = ['trakt', 'simkl', 'pmdb', 'mdblist'];
+const PROVIDERS: ProviderId[] = ['trakt', 'simkl', 'pmdb', 'mdblist', 'stremio'];
+const TARGETS = PROVIDERS.filter((p) => !SOURCE_ONLY.includes(p));
 const DATA_TYPES: { id: DataType; label: string }[] = [
   { id: 'history', label: 'Watch history' },
   { id: 'progress', label: 'Playback progress' },
@@ -380,6 +382,7 @@ function CreateSyncModal({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const connectedIds = new Set(connections.map((c) => c.provider));
+  const sourceOnly = SOURCE_ONLY.includes(source);
   const ratingsOn = types.includes('ratings');
   // Two-way removals would delete an item just added on the other side.
   const canPropagateRemovals = types.includes('watchlist') && direction === 'one_way';
@@ -446,19 +449,33 @@ function CreateSyncModal({
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="From">
-            <Select value={source} onChange={(e) => setSource(e.target.value as ProviderId)}>
+            <Select
+              value={source}
+              onChange={(e) => {
+                const next = e.target.value as ProviderId;
+                setSource(next);
+                // A source-only provider supplies watch history and nothing else.
+                if (SOURCE_ONLY.includes(next)) {
+                  setTypes(['history']);
+                  setDirection('one_way');
+                }
+              }}
+            >
               {PROVIDERS.map(providerOption)}
             </Select>
           </Field>
           <Field label="To">
             <Select value={target} onChange={(e) => setTarget(e.target.value as ProviderId)}>
-              {PROVIDERS.map(providerOption)}
+              {TARGETS.map(providerOption)}
             </Select>
           </Field>
         </div>
-        <Field label="Data">
+        <Field
+          label="Data"
+          hint={sourceOnly ? `${PROVIDER_LABEL[source]} only supplies watch history.` : undefined}
+        >
           <div className="flex flex-wrap gap-2">
-            {DATA_TYPES.map((d) => (
+            {DATA_TYPES.filter((d) => !sourceOnly || d.id === 'history').map((d) => (
               <button
                 key={d.id}
                 type="button"
@@ -531,7 +548,9 @@ function CreateSyncModal({
               onChange={(e) => setDirection(e.target.value as 'one_way' | 'two_way')}
             >
               <option value="one_way">One-way</option>
-              <option value="two_way">Two-way</option>
+              <option value="two_way" disabled={sourceOnly}>
+                Two-way
+              </option>
             </Select>
           </Field>
           <Field label="Every (minutes)" hint="Blank = manual only.">

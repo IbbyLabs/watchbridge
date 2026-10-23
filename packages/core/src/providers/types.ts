@@ -1,6 +1,11 @@
 /** Provider-agnostic domain types shared by the clients and the sync engine. */
 
-export type ProviderId = 'trakt' | 'simkl' | 'pmdb' | 'mdblist';
+export type ProviderId = 'trakt' | 'simkl' | 'pmdb' | 'mdblist' | 'stremio';
+
+/** Providers that can only be read from. They are never a sync target. */
+export const SOURCE_ONLY_PROVIDERS: readonly ProviderId[] = ['stremio'];
+
+export const isSourceOnly = (id: ProviderId): boolean => SOURCE_ONLY_PROVIDERS.includes(id);
 
 export type DataType = 'history' | 'progress' | 'ratings' | 'watchlist';
 

@@ -4,6 +4,9 @@ import {
   MdblistClient,
   PmdbClient,
   SimklClient,
+  StremioClient,
+  StremioLinkPending,
+  StremioSessionInvalid,
   TraktClient,
   createLogger,
   generatePkcePair,
@@ -12,6 +15,7 @@ import {
   type ProviderId,
   type SimklPin,
   type SimklTokens,
+  type SyncSource,
   type SyncTarget,
 } from '@watchbridge/core';
 import type { ConnectionStore, PublicConnection } from './store.js';
@@ -56,11 +60,11 @@ class OAuthStateStore {
 }
 
 /**
- * V2 device flow: the user sees the short `user_code`, but the server polls with
- * the secret `device_code`. This keeps the mapping server-side so the SPA stays
- * version-agnostic and never sees the device code.
+ * Pending device/link codes bound to the user who started them. For Simkl V2 the
+ * user sees the short `user_code` while the server polls with the secret
+ * `device_code`; for Stremio both are the same link code.
  */
-class SimklDeviceStore {
+class DeviceCodeStore {
   private readonly map = new Map<string, { userId: string; deviceCode: string; expiresAt: number }>();
 
   create(userId: string, userCode: string, deviceCode: string, expiresInSeconds: number): void {
@@ -94,7 +98,8 @@ export class ConnectionService {
   ) {}
 
   private readonly states = new OAuthStateStore();
-  private readonly simklDevices = new SimklDeviceStore();
+  private readonly simklDevices = new DeviceCodeStore();
+  private readonly stremioLinks = new DeviceCodeStore();
 
   /** Which AUTH version NEW Simkl connections use (env switch). */
   private simklVersion(): 'v1' | 'v2' {
@@ -113,7 +118,7 @@ export class ConnectionService {
     if (provider === 'trakt')
       return Boolean(this.config.TRAKT_CLIENT_ID && this.config.TRAKT_CLIENT_SECRET);
     if (provider === 'simkl') return Boolean(this.simklCreds(this.simklVersion()).clientId);
-    return true; // pmdb and mdblist are per-user keys, always available
+    return true; // pmdb, mdblist and stremio carry per-user credentials, always available
   }
 
   /** Whether the redirect (authorization-code) flow is available — needs a secret. */
@@ -250,6 +255,31 @@ export class ConnectionService {
     return this.store.upsert(userId, 'mdblist', 'MDBList', { kind: 'mdblist', apiKey }, fingerprint(apiKey));
   }
 
+  // ── Stremio link flow ─────────────────────────────────────────────
+
+  async startStremioLink(userId: string): Promise<DeviceCode> {
+    const link = await StremioClient.startLink();
+    this.stremioLinks.create(userId, link.userCode, link.deviceCode, link.expiresIn);
+    return link;
+  }
+
+  async pollStremioLink(userId: string, code: string): Promise<PollStatus> {
+    const pending = this.stremioLinks.get(code);
+    if (!pending || pending.userId !== userId) return 'expired';
+    let authKey: string;
+    try {
+      authKey = await StremioClient.completeLink(pending.deviceCode);
+    } catch (err) {
+      if (err instanceof StremioLinkPending) return 'pending';
+      throw err;
+    }
+    this.stremioLinks.remove(code);
+    // Stremio exposes no stable account id without reading the profile (email
+    // included), so none is recorded.
+    await this.store.upsert(userId, 'stremio', 'Stremio', { kind: 'stremio', authKey });
+    return 'connected';
+  }
+
   // ── Connected clients (for the sync engine) ──────────────────────
 
   async traktFor(userId: string): Promise<TraktClient | null> {
@@ -300,6 +330,12 @@ export class ConnectionService {
     return this.watchCredentials(new MdblistClient(c.creds.apiKey, this.appIdentity()), c.id, 'mdblist');
   }
 
+  async stremioFor(userId: string): Promise<StremioClient | null> {
+    const c = await this.store.getCreds(userId, 'stremio');
+    if (!c || c.creds.kind !== 'stremio') return null;
+    return this.watchCredentials(new StremioClient(c.creds.authKey, this.appIdentity()), c.id, 'stremio');
+  }
+
   /** App name/version for provider User-Agent headers (`name/version`). */
   private appIdentity(): { appName: string; appVersion: string } {
     return { appName: this.config.APP_NAME, appVersion: this.config.APP_VERSION };
@@ -320,8 +356,14 @@ export class ConnectionService {
           const out = (value as (...a: unknown[]) => unknown).apply(target, args);
           if (!(out instanceof Promise)) return out;
           return out.catch((err: unknown) => {
-            if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
-              log.warn({ provider, connectionId, status: err.status }, 'Provider rejected the stored credentials');
+            const rejected =
+              (err instanceof HttpError && (err.status === 401 || err.status === 403)) ||
+              err instanceof StremioSessionInvalid;
+            if (rejected) {
+              log.warn(
+                { provider, connectionId, ...(err instanceof HttpError ? { status: err.status } : {}) },
+                'Provider rejected the stored credentials',
+              );
               void this.store
                 .setStatus(connectionId, 'reauth')
                 .catch((e) => log.error({ provider, connectionId, err: e }, 'Failed to flag the connection for reconnection'));
@@ -333,12 +375,22 @@ export class ConnectionService {
     });
   }
 
-  /** A connected client for a provider, as the read/write port the engine uses. */
+  /**
+   * A connected client for a provider, as the read/write port the engine uses.
+   * Null for a source-only provider: it can never be written to.
+   */
   async clientFor(userId: string, provider: ProviderId): Promise<SyncTarget | null> {
+    if (provider === 'stremio') return null;
     if (provider === 'trakt') return this.traktFor(userId);
     if (provider === 'simkl') return this.simklFor(userId);
     if (provider === 'mdblist') return this.mdblistFor(userId);
     return this.pmdbFor(userId);
+  }
+
+  /** A connected client the engine may read from, including source-only providers. */
+  async sourceFor(userId: string, provider: ProviderId): Promise<SyncSource | null> {
+    if (provider === 'stremio') return this.stremioFor(userId);
+    return this.clientFor(userId, provider);
   }
 
   /**

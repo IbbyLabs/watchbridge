@@ -15,6 +15,7 @@ const DESCRIPTIONS: Record<ProviderId, string> = {
   simkl: 'History and lists (progress limited).',
   pmdb: 'History, resume points and lists.',
   mdblist: 'History, resume points, ratings and watchlist.',
+  stremio: 'Watch history. Read-only: Stremio is a source, never a target.',
 };
 
 export function Connections() {
@@ -209,6 +210,33 @@ export function Connections() {
           poll={(t) =>
             api
               .post<{ status: string }>('/api/connections/simkl/pin/poll', { userCode: t })
+              .then((r) => r.status)
+          }
+          onClose={() => setLinking(null)}
+          onDone={() => {
+            setLinking(null);
+            void load();
+          }}
+        />
+      )}
+      {linking === 'stremio' && (
+        <DeviceModal
+          title="Connect Stremio"
+          start={() =>
+            api
+              .post<{ userCode: string; verificationUrl: string; interval: number }>(
+                '/api/connections/stremio/link',
+              )
+              .then((r) => ({
+                userCode: r.userCode,
+                url: r.verificationUrl,
+                pollToken: r.userCode,
+                interval: r.interval,
+              }))
+          }
+          poll={(t) =>
+            api
+              .post<{ status: string }>('/api/connections/stremio/link/poll', { code: t })
               .then((r) => r.status)
           }
           onClose={() => setLinking(null)}

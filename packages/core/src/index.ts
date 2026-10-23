@@ -35,6 +35,14 @@ export {
 } from './providers/simkl.js';
 export { PmdbClient } from './providers/pmdb.js';
 export { MdblistClient } from './providers/mdblist.js';
+export {
+  StremioClient,
+  StremioLinkPending,
+  StremioSessionInvalid,
+  WatchedBitfieldError,
+  decodeWatchedField,
+  orderVideos,
+} from './providers/stremio.js';
 
 // Sync engine
 export { idStrings, itemKey, hasIdentity, MatchIndex } from './sync/identity.js';
@@ -51,6 +59,7 @@ export {
 export { includedByFilters, type SyncFilters } from './sync/filters.js';
 export {
   runSync,
+  isSyncTarget,
   type SyncSource,
   type SyncTarget,
   type SyncReport,

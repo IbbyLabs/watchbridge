@@ -4,6 +4,8 @@ import {
   runSync,
   createLogger,
   describeProviderError,
+  isSourceOnly,
+  isSyncTarget,
   type DataType,
   type ProviderId,
   type SyncFilters,
@@ -187,8 +189,18 @@ export class SyncRunner {
     const startedAt = new Date();
     const dataTypes = parseDataTypes(sync.dataTypes);
 
+    // Rows created before a provider became source-only, or edited directly,
+    // must never reach a write.
+    if (isSourceOnly(sync.target as ProviderId) || (sync.direction === 'two_way' && isSourceOnly(sync.source as ProviderId))) {
+      const error = `${isSourceOnly(sync.target as ProviderId) ? sync.target : sync.source} can only be a source, so this sync cannot run`;
+      log.error({ syncId: sync.id, source: sync.source, target: sync.target }, 'Refused a sync that would write to a source-only provider');
+      return this.finish(sync, trigger, { status: 'error', reports: [], error }, startedAt);
+    }
+
     const [source, target] = await Promise.all([
-      this.connections.clientFor(sync.userId, sync.source as ProviderId),
+      isSourceOnly(sync.source as ProviderId)
+        ? this.connections.sourceFor(sync.userId, sync.source as ProviderId)
+        : this.connections.clientFor(sync.userId, sync.source as ProviderId),
       this.connections.clientFor(sync.userId, sync.target as ProviderId),
     ]);
 
@@ -257,7 +269,7 @@ export class SyncRunner {
         await this.persistDeliveries(sync, sync.target, forward);
       }
 
-      if (sync.direction === 'two_way') {
+      if (sync.direction === 'two_way' && isSyncTarget(source)) {
         const back = await runSync(target, source, {
           dataTypes,
           preview,

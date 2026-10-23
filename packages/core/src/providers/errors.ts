@@ -1,4 +1,5 @@
 import { HttpError } from './http.js';
+import { StremioSessionInvalid } from './stremio.js';
 import type { ProviderId } from './types.js';
 
 const LABEL: Record<ProviderId, string> = {
@@ -6,6 +7,7 @@ const LABEL: Record<ProviderId, string> = {
   simkl: 'Simkl',
   pmdb: 'PublicMetaDB',
   mdblist: 'MDBList',
+  stremio: 'Stremio',
 };
 
 /**
@@ -16,6 +18,8 @@ const LABEL: Record<ProviderId, string> = {
  * plain description rather than a raw code, so nothing surfaces as "HTTP 423".
  */
 export function describeProviderError(provider: ProviderId, err: unknown): string {
+  // Self-contained, and raised by the source even when the target is the provider named.
+  if (err instanceof StremioSessionInvalid) return err.message;
   const name = LABEL[provider] ?? provider;
   if (!(err instanceof HttpError)) {
     const detail = err instanceof Error ? err.message : String(err);

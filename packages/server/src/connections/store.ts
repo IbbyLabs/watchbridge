@@ -31,7 +31,12 @@ export interface MdblistCreds {
   kind: 'mdblist';
   apiKey: string;
 }
-export type Credentials = TraktCreds | SimklCreds | PmdbCreds | MdblistCreds;
+export interface StremioCreds {
+  kind: 'stremio';
+  /** Session key from Stremio's link flow; never an email or password. */
+  authKey: string;
+}
+export type Credentials = TraktCreds | SimklCreds | PmdbCreds | MdblistCreds | StremioCreds;
 
 /** Connection with no secret material — safe to return to the client. */
 export interface PublicConnection {

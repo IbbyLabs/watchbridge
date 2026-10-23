@@ -1,13 +1,14 @@
-import type {
-  DataType,
-  MediaRef,
-  ProgressEvent,
-  ProviderCapabilities,
-  ProviderId,
-  PushResult,
-  RatingEvent,
-  WatchEvent,
-  WatchlistEvent,
+import {
+  isSourceOnly,
+  type DataType,
+  type MediaRef,
+  type ProgressEvent,
+  type ProviderCapabilities,
+  type ProviderId,
+  type PushResult,
+  type RatingEvent,
+  type WatchEvent,
+  type WatchlistEvent,
 } from '../providers/types.js';
 import { createLogger } from '../logger.js';
 import { planHistorySync, planProgressSync, planRatingsSync, planWatchlistSync } from './plan.js';
@@ -169,6 +170,11 @@ export interface RunSyncOptions {
   now?: () => Date;
 }
 
+/** Whether a source can also be written to; false for source-only providers. */
+export function isSyncTarget(provider: SyncSource): provider is SyncTarget {
+  return !isSourceOnly(provider.id) && typeof (provider as Partial<SyncTarget>).pushHistory === 'function';
+}
+
 /**
  * Run a one-directional sync (source → target) for the requested data types.
  * Additive and idempotent: re-running after an apply plans zero operations,
@@ -179,6 +185,9 @@ export async function runSync(
   target: SyncTarget,
   options: RunSyncOptions,
 ): Promise<SyncReport> {
+  if (isSourceOnly(target.id)) {
+    throw new Error(`${target.id} is a source-only provider and cannot be a sync target`);
+  }
   const now = options.now ?? (() => new Date());
   const startedAt = now().toISOString();
   const results: DataTypeReport[] = [];

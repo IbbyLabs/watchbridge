@@ -1,12 +1,13 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import type { AppConfig, ProviderId } from '@watchbridge/core';
+import { isSourceOnly, type AppConfig, type ProviderId } from '@watchbridge/core';
 import { requireAuth } from '../plugins/auth.js';
 import type { ConnectionStore } from '../connections/store.js';
 import { ConnectionService, InvalidApiKey, ProviderNotConfigured } from '../connections/service.js';
 
 const deviceBody = z.object({ deviceCode: z.string().min(1) });
 const pinBody = z.object({ userCode: z.string().min(1) });
+const stremioLinkBody = z.object({ code: z.string().min(1).max(64) });
 const pmdbBody = z.object({ apiKey: z.string().min(10).max(200) });
 const mdblistBody = z.object({ apiKey: z.string().min(10).max(200) });
 
@@ -25,12 +26,13 @@ export function connectionRoutes(
   // Which providers the operator has configured (SPA hides unavailable ones).
   // `redirect` = the one-click browser flow is available (needs a client secret).
   app.get('/api/connections/providers', auth, async (_request, reply) => {
-    const providers: ProviderId[] = ['trakt', 'simkl', 'pmdb', 'mdblist'];
+    const providers: ProviderId[] = ['trakt', 'simkl', 'pmdb', 'mdblist', 'stremio'];
     return reply.send(
       providers.map((p) => ({
         provider: p,
         configured: service.isConfigured(p),
         redirect: p === 'trakt' || p === 'simkl' ? service.redirectConfigured(p) : false,
+        sourceOnly: isSourceOnly(p),
       })),
     );
   });
@@ -105,6 +107,25 @@ export function connectionRoutes(
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_input' });
     try {
       const status = await service.pollSimklPin(request.user!.id, parsed.data.userCode);
+      return reply.send({ status });
+    } catch (err) {
+      return providerError(reply, err);
+    }
+  });
+
+  app.post('/api/connections/stremio/link', auth, async (request, reply) => {
+    try {
+      return reply.send(await service.startStremioLink(request.user!.id));
+    } catch (err) {
+      return providerError(reply, err);
+    }
+  });
+
+  app.post('/api/connections/stremio/link/poll', auth, async (request, reply) => {
+    const parsed = stremioLinkBody.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid_input' });
+    try {
+      const status = await service.pollStremioLink(request.user!.id, parsed.data.code);
       return reply.send({ status });
     } catch (err) {
       return providerError(reply, err);

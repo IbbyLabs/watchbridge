@@ -108,7 +108,7 @@ export const connections = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    provider: text('provider').notNull(), // 'trakt' | 'simkl' | 'pmdb' | 'mdblist'
+    provider: text('provider').notNull(), // 'trakt' | 'simkl' | 'pmdb' | 'mdblist' | 'stremio'
     /** Display name for the linked account. */
     label: text('label'),
     /** AES-256-GCM encrypted JSON credential blob (tokens or api key). */
