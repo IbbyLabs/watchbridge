@@ -87,11 +87,19 @@ describe('decodeWatchedField', () => {
     }
   });
 
-  it('rejects a field whose anchor exists in the list but whose bit is clear', () => {
+  it('rejects a shift whose anchor bit is clear', () => {
     const videos = ids(8);
-    // Bits 0 and 1 set, anchor claims video 5 is the last watched: built from another list.
-    const field = `${videos[4]}:5:${deflateSync(Buffer.from([0b011])).toString('base64')}`;
+    // Bits 0 and 1 set, anchor at index 6 but claimed at 5: built from another list.
+    const field = `${videos[6]}:5:${deflateSync(Buffer.from([0b011])).toString('base64')}`;
     expect(() => decodeWatchedField(field, videos)).toThrow(/anchor_mismatch/);
+  });
+
+  it('reads the older JS encoding, anchored on the last video rather than the last watched', () => {
+    const videos = ids(8);
+    const field = `${videos[7]}:8:${deflateSync(Buffer.from([0b0101])).toString('base64')}`;
+    expect([...decodeWatchedField(field, videos)]).toEqual([0, 2]);
+    // New episodes appended after it was written.
+    expect([...decodeWatchedField(field, [...videos, 'x:1', 'y:1'])]).toEqual([0, 2]);
   });
 
   it('treats an all-zero field as nothing watched, not as a mismatch', () => {

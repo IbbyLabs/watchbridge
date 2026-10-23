@@ -141,13 +141,12 @@ export function decodeWatchedField(serialized: string, videoIds: string[]): Set<
   }
 
   const bit = (j: number): boolean => (((values[j >> 3] ?? 0) >> (j & 7)) & 1) === 1;
-  if (!bit(anchorLength - 1)) {
-    // The anchor is the last watched video, so its bit must be set. An all-zero
-    // field is how an empty bitfield serialises (anchor on the first video).
-    if (values.some((b) => b !== 0)) throw new WatchedBitfieldError('anchor_mismatch');
-    return new Set();
-  }
   const offset = anchorLength - 1 - anchorIdx;
+  // stremio-core anchors on the last watched video, so a shift is trusted only
+  // when its anchor bit is set; the older JS encoder anchors on the last video.
+  if (offset !== 0 && !bit(anchorLength - 1) && values.some((b) => b !== 0)) {
+    throw new WatchedBitfieldError('anchor_mismatch');
+  }
   const watched = new Set<number>();
   for (let i = 0; i < videoIds.length; i++) {
     const j = i + offset;
