@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/IbbyLabs/watchbridge/compare/v1.4.0...v1.4.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **sync:** write deliveries in chunks, restart on a broken database ([6eb87be](https://github.com/IbbyLabs/watchbridge/commit/6eb87be41a6c2c1cee1d2c5d60b1b374b983ce49))
+
 ## [1.4.0](https://github.com/IbbyLabs/watchbridge/compare/v1.3.0...v1.4.0) (2026-10-23)
 
 
