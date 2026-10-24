@@ -27,6 +27,23 @@ function pglitePath(databaseUrl: string): string {
   return resolve(process.cwd(), raw || './data/pg');
 }
 
+// A RangeError from PGlite's protocol parser leaves the embedded connection unusable for every
+// later query; exiting lets the container restart policy bring up a fresh one.
+function exitOnBrokenProtocol(client: { query: (...args: never[]) => Promise<unknown> }): void {
+  const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+  (client as { query: (...args: unknown[]) => Promise<unknown> }).query = async (...args: unknown[]) => {
+    try {
+      return await query(...args);
+    } catch (err) {
+      if (err instanceof RangeError) {
+        log.fatal({ err }, 'The embedded database connection broke; exiting so it restarts cleanly');
+        process.exit(1);
+      }
+      throw err;
+    }
+  };
+}
+
 export async function createDb(databaseUrl: string): Promise<Db> {
   if (/^postgres(ql)?:\/\//.test(databaseUrl)) {
     const { Pool } = await import('pg');
@@ -56,6 +73,7 @@ export async function createDb(databaseUrl: string): Promise<Db> {
   const dir = pglitePath(databaseUrl);
   mkdirSync(dir, { recursive: true });
   client = new PGlite(dir);
+  exitOnBrokenProtocol(client);
   const orm = drizzlePglite(client, { schema });
   log.info({ dir }, 'Using embedded PGlite');
   return {

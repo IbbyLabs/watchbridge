@@ -38,6 +38,14 @@ describe('DeliveriesStore', () => {
     expect(loaded).toHaveLength(3);
   });
 
+  it('records and forgets more refs than one statement can bind', async () => {
+    const many = Array.from({ length: 15000 }, (_, i) => ep(Math.floor(i / 100) + 1, (i % 100) + 1));
+    await store.record('s1', 'u1', 'pmdb', many);
+    expect(await store.load('s1', 'pmdb')).toHaveLength(15000);
+    await store.forget('s1', 'pmdb', many);
+    expect(await store.load('s1', 'pmdb')).toHaveLength(0);
+  });
+
   it('skips refs with no usable id rather than throwing', async () => {
     await store.record('s1', 'u1', 'simkl', [{ kind: 'movie', ids: {}, title: 'No Id' }]);
     expect(await store.load('s1', 'simkl')).toHaveLength(3); // unchanged

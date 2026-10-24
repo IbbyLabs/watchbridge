@@ -4,6 +4,15 @@ import { itemKey, type DataType, type MediaRef } from '@watchbridge/core';
 import type { Db } from '../db/client.js';
 import { deliveries } from '../db/schema.js';
 
+// Postgres caps a statement at 65,535 bind parameters; a row here uses 7.
+const WRITE_CHUNK = 1000;
+
+function chunks<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 /**
  * Persistence for a sync's "convergence memory" — the items it has already
  * delivered to a given target. Scoped per (sync, target provider, data type) so
@@ -101,8 +110,9 @@ export class DeliveriesStore {
           : null;
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);
-    if (rows.length === 0) return;
-    await this.db.orm.insert(deliveries).values(rows).onConflictDoNothing();
+    for (const part of chunks(rows, WRITE_CHUNK)) {
+      await this.db.orm.insert(deliveries).values(part).onConflictDoNothing();
+    }
   }
 
   /**
@@ -112,16 +122,17 @@ export class DeliveriesStore {
    */
   async forget(syncId: string, target: string, refs: MediaRef[], dataType: DataType = 'history'): Promise<void> {
     const keys = refs.map(itemKey).filter((k): k is string => k !== null);
-    if (keys.length === 0) return;
-    await this.db.orm
-      .delete(deliveries)
-      .where(
-        and(
-          eq(deliveries.syncId, syncId),
-          eq(deliveries.target, target),
-          eq(deliveries.dataType, dataType),
-          inArray(deliveries.itemKey, keys),
-        ),
-      );
+    for (const part of chunks(keys, WRITE_CHUNK)) {
+      await this.db.orm
+        .delete(deliveries)
+        .where(
+          and(
+            eq(deliveries.syncId, syncId),
+            eq(deliveries.target, target),
+            eq(deliveries.dataType, dataType),
+            inArray(deliveries.itemKey, part),
+          ),
+        );
+    }
   }
 }
