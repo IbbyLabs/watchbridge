@@ -17,6 +17,8 @@ services:
       # Transactional email via Resend. Optional: without a key, every message
       # (including the account-verification link) is logged instead of sent.
       RESEND_API_KEY: ${RESEND_API_KEY}
+      CF_EMAIL_ACCOUNT_ID: ${CF_EMAIL_ACCOUNT_ID:-}
+      CF_EMAIL_API_TOKEN: ${CF_EMAIL_API_TOKEN:-}
       MAIL_FROM: Watchbridge <no-reply@localhost>
     depends_on:
       postgres:

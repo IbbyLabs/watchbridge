@@ -52,7 +52,8 @@ sending it and runs normally — you just won't receive the links. For a single-
 Password resets and sync-failure alerts are emailed, so without a key they only land in the logs:
 change a password while signed in, and read sync problems from the syncs page rather than an
 inbox. To get real mail, set `RESEND_API_KEY` and a `MAIL_FROM` on a domain you've verified with
-Resend (an unverified domain fails silently).
+Resend (an unverified domain fails silently), or `CF_EMAIL_ACCOUNT_ID` and `CF_EMAIL_API_TOKEN` with a
+`MAIL_FROM` on a domain onboarded to Cloudflare Email Sending.
 
 ## Develop
 
@@ -82,6 +83,7 @@ list. Notable ones:
 | `TRUSTED_PROXIES`      | `cloudflare`, `loopback`, `private`, or explicit CIDRs — controls real-IP detection |
 | `REGISTRATION_ENABLED` | Toggle public sign-ups; turn off once your own account exists                       |
 | `RESEND_API_KEY` / `MAIL_FROM` | Optional mail (verification, password resets, alerts) via Resend              |
+| `CF_EMAIL_ACCOUNT_ID` / `CF_EMAIL_API_TOKEN` | Optional mail via Cloudflare Email Sending; used instead of Resend when set |
 | `TRAKT_*` / `SIMKL_*`  | Operator-registered OAuth app credentials; `SIMKL_AUTH_VERSION` + `SIMKL_V2_*` switch new Simkl connections to AUTH V2 |
 
 Behind Cloudflare, set `TRUSTED_PROXIES=cloudflare` so per-IP rate limits use the real visitor IP

@@ -66,6 +66,9 @@ const envSchema = z.object({
   // key, emails are logged instead of sent, so a single-user instance runs
   // without a mail provider (the verification link is read from the logs).
   RESEND_API_KEY: z.string().optional(),
+  // Cloudflare Email Sending; takes precedence over Resend when both are set.
+  CF_EMAIL_ACCOUNT_ID: z.string().optional(),
+  CF_EMAIL_API_TOKEN: z.string().optional(),
   MAIL_FROM: z.string().default('Watchbridge <no-reply@localhost>'),
 
   // Providers (operator-registered apps)
