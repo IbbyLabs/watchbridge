@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/IbbyLabs/watchbridge/compare/v1.4.1...v1.5.0) (2026-10-26)
+
+
+### Features
+
+* **mail:** send through Cloudflare Email Sending when configured ([54513a6](https://github.com/IbbyLabs/watchbridge/commit/54513a6a22abe5425d50d0a5c3dce07b4065f3fa))
+
 ## [1.4.1](https://github.com/IbbyLabs/watchbridge/compare/v1.4.0...v1.4.1) (2026-10-24)
 
 
